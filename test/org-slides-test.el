@@ -31,6 +31,22 @@ Text two.
                    (< position (overlay-end overlay))))
             (overlays-in (point-min) (point-max))))
 
+(ert-deftest org-slides-test-auto-page-default ()
+  "Automatic pagination is enabled by default."
+  (should org-slides-auto-page))
+
+(ert-deftest org-slides-test-page-markers ()
+  "Page state is reset and cleared cleanly."
+  (with-temp-buffer
+    (insert "Some text")
+    (org-slides--reset-pages)
+    (should (= org-slides--page-index 0))
+    (should (= (length org-slides--page-starts) 1))
+    (should (markerp (car org-slides--page-starts)))
+    (org-slides--clear-page-markers)
+    (should-not org-slides--page-starts)
+    (should (= org-slides--page-index 0))))
+
 (ert-deftest org-slides-test-default-keybindings ()
   "The navigation keys are bound by default."
   (should (eq (lookup-key org-slides-mode-map (kbd "n"))

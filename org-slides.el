@@ -47,6 +47,8 @@
 ;;   not gain blank lines from their hidden `#+begin_src'/`#+end_src'
 ;;   delimiters.
 ;; - Literal `#+' lines inside source/example/quote blocks are not hidden.
+;; - Slides taller than the window are paged one screenful at a time in the
+;;   same window.  `n'/`p' walk the pages before moving to another slide.
 ;; - The text scale in use before the presentation is restored on quit.
 ;; - Overlay and cursor state is buffer-local, so multiple presentations do
 ;;   not clobber each other.
@@ -104,6 +106,14 @@ presentation programs."
   :type 'boolean
   :group 'org-slides)
 
+(defcustom org-slides-auto-page t
+  "Whether to page through slides that are taller than the window.
+When non-nil, next/previous navigation first moves by one screenful
+inside the current slide; a single window is always used.  When the
+end of the slide is visible, navigation moves to the next slide."
+  :type 'boolean
+  :group 'org-slides)
+
 (defvar org-slides-mode nil
   "Non-nil when `org-slides-mode' is active in the current buffer.")
 
@@ -131,6 +141,15 @@ Each function is called with the buffer name and current heading.")
 
 (defvar-local org-slides--started nil
   "Non-nil while `org-slides--setup' has completed for this buffer.")
+
+(defvar-local org-slides--page-starts nil
+  "Markers at the start of each page shown in the current slide.")
+
+(defvar-local org-slides--page-index 0
+  "Index of the current page in `org-slides--page-starts'.")
+
+(defvar-local org-slides--original-window-start nil
+  "Marker for the window start before the presentation began.")
 
 (defvar org-slides-mode-map
   (let ((map (make-sparse-keymap)))
@@ -197,31 +216,130 @@ Each function is called with the buffer name and current heading.")
     (run-hook-with-args 'org-slides-after-navigate-functions
                         (buffer-name) heading)))
 
+(defun org-slides--presentation-window ()
+  "Return the window displaying the current buffer, or nil."
+  (let ((selected (selected-window)))
+    (if (eq (window-buffer selected) (current-buffer))
+        selected
+      (let ((window (get-buffer-window (current-buffer) t)))
+        (and (window-live-p window) window)))))
+
+(defun org-slides--clear-page-markers ()
+  "Release the markers recorded for the current slide's pages."
+  (mapc (lambda (marker)
+          (when (markerp marker)
+            (set-marker marker nil)))
+        org-slides--page-starts)
+  (setq org-slides--page-starts nil
+        org-slides--page-index 0))
+
+(defun org-slides--reset-pages ()
+  "Start pagination at the beginning of the current slide."
+  (org-slides--clear-page-markers)
+  (setq org-slides--page-starts (list (copy-marker (point-min)))
+        org-slides--page-index 0)
+  (when-let* ((window (org-slides--presentation-window)))
+    (set-window-start window (point-min))
+    (with-selected-window window
+      (goto-char (point-min)))))
+
+(defun org-slides--more-pages-p ()
+  "Return non-nil when the end of the current slide is not visible."
+  (when-let* ((window (org-slides--presentation-window)))
+    (not (pos-visible-in-window-p (point-max) window))))
+
+(defun org-slides--next-page-start (window)
+  "Return the buffer position where the next page in WINDOW starts.
+The position is at the end of the visible text, moved back to a word
+boundary when the window ends in the middle of a wrapped line."
+  (let* ((limit (point-max))
+         (start (window-start window))
+         (end (min (or (window-end window t) limit) limit)))
+    (cond
+     ((<= end start)
+      ;; No measurable progress; advance at least one line.
+      (save-excursion
+        (goto-char start)
+        (forward-line 1)
+        (min (point) limit)))
+     (t
+      (save-excursion
+        (goto-char end)
+        (when (and (> (point) start)
+                   (not (memq (char-before) '(?\s ?\t ?\n))))
+          (skip-chars-backward "^ \t\n")
+          (when (<= (point) start)
+            (goto-char end)))
+        (point))))))
+
+(defun org-slides--next-page ()
+  "Show the next screenful of the current slide.
+Return non-nil when a new page was shown."
+  (when (and org-slides-auto-page
+             (not org-slides--one-big-page)
+             (org-slides--more-pages-p))
+    (when-let* ((window (org-slides--presentation-window))
+                (start (window-start window))
+                (next (org-slides--next-page-start window)))
+      (when (and (> next start)
+                 (< next (point-max)))
+        (set-window-start window next)
+        (with-selected-window window
+          (goto-char next))
+        (setq org-slides--page-starts
+              (append org-slides--page-starts (list (copy-marker next)))
+              org-slides--page-index (1+ org-slides--page-index))
+        t))))
+
+(defun org-slides--prev-page ()
+  "Show the previous screenful of the current slide.
+Return non-nil when a new page was shown."
+  (when (and org-slides-auto-page
+             (not org-slides--one-big-page)
+             (> org-slides--page-index 0)
+             (< (1- org-slides--page-index)
+                (length org-slides--page-starts)))
+    (when-let* ((window (org-slides--presentation-window))
+                (marker (nth (1- org-slides--page-index)
+                             org-slides--page-starts))
+                (start (and (markerp marker) (marker-position marker))))
+      (setq org-slides--page-index (1- org-slides--page-index))
+      (set-window-start window start)
+      (with-selected-window window
+        (goto-char start))
+      t)))
+
 (defun org-slides-next ()
-  "Move to the next top-level heading."
+  "Move to the next page, or the next top-level heading."
   (interactive)
-  (widen)
-  (if (org-current-level)
-      (progn
-        (org-slides-top)
-        (or (org-get-next-sibling)
-            (org-slides-top)))
-    (outline-next-heading))
-  (org-slides--narrow-or-widen)
-  (org-slides-run-after-navigate-functions))
+  (unless (org-slides--next-page)
+    (widen)
+    (if (org-current-level)
+        (progn
+          (org-slides-top)
+          (or (org-get-next-sibling)
+              (org-slides-top)))
+      (outline-next-heading))
+    (org-slides--narrow-or-widen)
+    (unless org-slides--one-big-page
+      (org-slides--reset-pages))
+    (org-slides-run-after-navigate-functions)))
 
 (defun org-slides-prev ()
-  "Move to the previous top-level heading, or the title slide."
+  "Move to the previous page, or the previous top-level heading."
   (interactive)
-  (widen)
-  (if (org-current-level)
-      (progn
-        (org-slides-top)
-        (unless (org-get-previous-sibling)
-          (goto-char (point-min))))
-    (goto-char (point-min)))
-  (org-slides--narrow-or-widen)
-  (org-slides-run-after-navigate-functions))
+  (unless (org-slides--prev-page)
+    (widen)
+    (if (org-current-level)
+        (progn
+          (org-slides-top)
+          (unless (org-get-previous-sibling)
+            (goto-char (point-min))))
+      (goto-char (point-min)))
+    (org-slides--narrow-or-widen)
+    (unless org-slides--one-big-page
+      (org-slides--reset-pages))
+    (org-slides-run-after-navigate-functions)))
 
 (defun org-slides-beginning ()
   "Move to the first slide (the title slide, if there is one)."
@@ -229,6 +347,8 @@ Each function is called with the buffer name and current heading.")
   (widen)
   (goto-char (point-min))
   (org-slides--narrow-or-widen)
+  (unless org-slides--one-big-page
+    (org-slides--reset-pages))
   (org-slides-run-after-navigate-functions))
 
 (defun org-slides-end ()
@@ -238,6 +358,8 @@ Each function is called with the buffer name and current heading.")
   (goto-char (point-max))
   (org-slides-top)
   (org-slides--narrow-or-widen)
+  (unless org-slides--one-big-page
+    (org-slides--reset-pages))
   (org-slides-run-after-navigate-functions))
 
 (defun org-slides-toggle-one-big-page ()
@@ -245,8 +367,12 @@ Each function is called with the buffer name and current heading.")
   (interactive)
   (setq org-slides--one-big-page (not org-slides--one-big-page))
   (if org-slides--one-big-page
-      (widen)
-    (org-slides-narrow))
+      (progn
+        (widen)
+        (org-slides--clear-page-markers))
+    (org-slides-narrow)
+    (org-slides--reset-pages))
+  (org-slides-run-after-navigate-functions)
   (message "Org Slides: %s"
            (if org-slides--one-big-page
                "showing all slides"
@@ -390,7 +516,12 @@ example block visible."
     (setq org-slides-mode nil)
     (user-error "Org Slides requires Org mode"))
   (unless org-slides--started
-    (setq org-slides--started t)
+    (setq org-slides--started t
+          org-slides--one-big-page nil)
+    (org-slides--clear-page-markers)
+    (when-let* ((window (org-slides--presentation-window)))
+      (setq org-slides--original-window-start
+            (copy-marker (window-start window))))
     (setq org-slides--previous-text-scale
           (if (bound-and-true-p text-scale-mode)
               (or (bound-and-true-p text-scale-mode-amount) 0)
@@ -403,6 +534,7 @@ example block visible."
       (org-slides--display-inline-images)
       (setq org-slides--images-displayed t))
     (org-slides-narrow)
+    (org-slides--reset-pages)
     (when org-slides-read-only-on-start
       (org-slides-read-only))
     (when org-slides-hide-cursor-on-start
@@ -421,7 +553,15 @@ example block visible."
     (setq buffer-read-only org-slides--previous-read-only)
     (setq org-slides--cursor-cache nil
           org-slides--one-big-page nil)
-    (widen)))
+    (org-slides--clear-page-markers)
+    (widen)
+    (when (markerp org-slides--original-window-start)
+      (let ((window (org-slides--presentation-window))
+            (start (marker-position org-slides--original-window-start)))
+        (when (and window start)
+          (set-window-start window start)))
+      (set-marker org-slides--original-window-start nil))
+    (setq org-slides--original-window-start nil)))
 
 ;;;###autoload
 (define-minor-mode org-slides-mode

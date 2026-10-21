@@ -15,6 +15,7 @@
 - `org-slides-mode` is the minor mode. Enabling it runs `org-slides--setup`; disabling it runs `org-slides--teardown`.
 - `org-slides-start` is the user entry point. It enables the mode and runs `org-slides-after-navigate-functions` for the initial slide.
 - Navigation commands narrow to the current top-level subtree unless the one-big-page view is active.
+- Tall slides are paged by scrolling one screenful at a time in the same window.  `org-slides--next-page`/`--prev-page` use window start/end positions; page starts are stored as markers.  A page break must never skip unseen text: use the window end directly, moving back only to a word boundary when it lands mid-word.
 - `org-slides--add-overlays` hides `#+` keyword/block delimiter lines, heading stars, and emphasis markers. Complete-line overlays must include the trailing newline; otherwise they leave blank lines around source blocks.
 - Do not hide `#+` lines that are literal content inside source/example/quote blocks.
 - The text scale is saved on setup and restored on teardown. Overlay and cursor state is buffer-local.

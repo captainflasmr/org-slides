@@ -23,10 +23,14 @@ title slide.  Nested headings stay on their parent slide.
   source blocks.
 - Literal =#+= lines inside source, example, export, comment, quote, verse,
   center, special, and dynamic blocks are left visible.
+- Long slides are paged automatically, one screenful at a time, in the same
+  window.  The end of the slide is never cut off; =n=/=p= move through the
+  pages and then to the next/previous slide.
 - The text scale in use before the presentation is restored on quit.
 - Overlay and cursor state is buffer-local, so multiple presentations do not
   clobber each other.
-- Optional one-page view with =C-c C-1=.
+- Optional one-page view with =C-c C-1=; this disables automatic paging and
+  shows the whole buffer.
 
 * Installation
 
@@ -49,28 +53,31 @@ In the offline toolkit the package lives under
 
 Open an Org file and run =M-x org-slides-start= (or =C-c s p= if you added the
 binding above).  The current slide is narrowed to the window and the text is
-enlarged.  Use the navigation keys below.  =q= or =C-c C-q= quits.
+enlarged.  If a slide is taller than the window, =n= first scrolls through it
+one screenful at a time; another =n= at the end moves to the next slide.
+=p= walks back through those pages.  Use the navigation keys below.  =q= or
+=C-c C-q= quits.
 
 * Default keys
 
-| Key         | Command                          |
-|-------------+----------------------------------|
-| =n= / =SPC= | Next slide                       |
-| =p= / =S-SPC= | Previous slide                 |
-| =right=     | Next slide                       |
-| =left=      | Previous slide                   |
-| =next=      | Next slide                       |
-| =prior=     | Previous slide                   |
-| =g=         | First slide                      |
-| =G=         | Last slide                       |
-| =q=         | Quit                             |
-| =C-c C-n=   | Next slide (works while editing) |
-| =C-c C-p=   | Previous slide                   |
-| =C-c C-q=   | Quit                             |
-| =C-c C-= / C-c C--= | Increase/decrease text size |
-| =C-c C-r / C-c C-w= | Read-only / read-write      |
-| =C-c C-1=   | Toggle the one-page view         |
-| =C-c <= / =C-c >= | First/last slide            |
+| Key                 | Command                            |
+|---------------------+------------------------------------|
+| =n= / =SPC=         | Next page / next slide             |
+| =p= / =S-SPC=       | Previous page / previous slide     |
+| =right=             | Next page / next slide             |
+| =left=              | Previous page / previous slide     |
+| =next=              | Next page / next slide             |
+| =prior=             | Previous page / previous slide     |
+| =g=                 | First slide                        |
+| =G=                 | Last slide                         |
+| =q=                 | Quit                               |
+| =C-c C-n=           | Next page / next slide             |
+| =C-c C-p=           | Previous page / previous slide     |
+| =C-c C-q=           | Quit                               |
+| =C-c C-= / C-c C--= | Increase/decrease text size        |
+| =C-c C-r / C-c C-w= | Read-only / read-write             |
+| =C-c C-1=           | Toggle the one-page view           |
+| =C-c <= / =C-c >=   | First/last slide                   |
 
 The letter and =SPC= keys only navigate while the buffer is read-only.  Turn
 off =org-slides-read-only-on-start= or use =C-c C-w= to edit, then use the
@@ -86,6 +93,7 @@ arrow keys or =C-c C-n= / =C-c C-p= to navigate.
 (setq org-slides-hide-cursor-on-start t)
 (setq org-slides-hide-stars-in-headings t)
 (setq org-slides-startup-folded nil)    ; fold each slide on navigation
+(setq org-slides-auto-page t)           ; page tall slides in one window
 #+end_src
 
 * Hooks
@@ -93,7 +101,7 @@ arrow keys or =C-c C-n= / =C-c C-p= to navigate.
 - =org-slides-mode-hook= runs when the minor mode is enabled or disabled.
 - =org-slides-after-navigate-functions= is an abnormal hook called with the
   buffer name and current heading after the presentation starts or changes
-  slides.
+  slides.  It is not called when moving between pages of the same slide.
 
 For example, refresh =org-table-fit= overlays after each slide change:
 
@@ -115,6 +123,8 @@ For example, refresh =org-table-fit= overlays after each slide change:
 - Literal =#+= lines inside block contents are not hidden.
 - Overlay lists and cursor caches are buffer-local.
 - The previous text scale is restored on quit.
+- Tall slides are automatically paged in a single window; org-present just
+  narrows to the slide and lets the overflow run off the bottom.
 - The one-page view is respected by next/previous navigation.
 - Modern Org calls are used (=org-get-previous-sibling=,
   =outline-show-all=).

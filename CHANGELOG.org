@@ -3,6 +3,18 @@
 #+language: en
 #+options: toc:nil num:nil
 
+* Unreleased
+
+** Added
+- Automatic pagination for slides taller than the window: =n=/=p= (and the
+  other navigation keys) first move by one screenful inside the current
+  slide, then move to the next/previous slide.  Everything stays in one
+  window; the original window start is restored on quit.
+- New option =org-slides-auto-page= (default =t=).  Set it to =nil= to go
+  straight from slide to slide even when a slide overflows the window.
+- Page positions are tracked with markers, so editing does not invalidate the
+  page history.
+
 * Version 0.1.0
 
 Initial fork of [[https://github.com/rlister/org-present][org-present]] (upstream commit
