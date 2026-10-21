@@ -23,6 +23,7 @@
 - The original =mode-line-process= and window start are restored on quit.
 - New =org-slides-page-indicator-format= controls the mode-line SLIDE.PAGE/totals format.
 - Next navigation at the end of the last slide now stays on the final page instead of resetting that slide to page 0 and appearing to bounce between the last pages.
+- Previous navigation from the first page of a slide now enters the previous slide at its last page and then walks backward through all of that slide's sub-pages.  Previously it skipped straight to the previous slide's first page.
 
 * Version 0.1.0
 

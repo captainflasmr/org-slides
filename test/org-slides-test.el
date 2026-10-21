@@ -153,6 +153,46 @@ Text two.
                 (should (= org-slides--page-index page)))))
         (org-slides-quit)))))
 
+(ert-deftest org-slides-test-prev-enters-last-subpage ()
+  "Previous slide lands on that slide's last page, then pages backward."
+  (let ((org-slides-page-style 'split))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* First\n\n")
+      (dotimes (i 200)
+        (insert (format "First %03d: page content.\n" i)))
+      (insert "\n* Second\n\n")
+      (dotimes (i 200)
+        (insert (format "Second %03d: page content.\n" i)))
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            ;; Go to the second slide's first page.
+            (org-slides-end)
+            (should (= org-slides--slide-number 2))
+            (should (= org-slides--page-index 0))
+            ;; Previous slide should land on the last page of slide 1.
+            (org-slides-prev)
+            (should (= org-slides--slide-number 1))
+            (should (= org-slides--page-index
+                       (1- (length org-slides--split-pages))))
+            ;; Walking back within slide 1 should stay on its pages.
+            (org-slides-prev)
+            (should (= org-slides--slide-number 1))
+            (should (= org-slides--page-index
+                       (- (length org-slides--split-pages) 2)))
+            ;; At the first page there is no previous slide; stay there.
+            (let ((count (length org-slides--split-pages)))
+              (dotimes (_ (1- count))
+                (org-slides-prev))
+              (should (= org-slides--slide-number 1))
+              (should (= org-slides--page-index 0))
+              (org-slides-prev)
+              (should (= org-slides--slide-number 1))
+              (should (= org-slides--page-index 0))))
+        (org-slides-quit)))))
+
 (ert-deftest org-slides-test-default-keybindings ()
   "The navigation keys are bound by default."
   (should (eq (lookup-key org-slides-mode-map (kbd "n"))

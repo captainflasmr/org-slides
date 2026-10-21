@@ -60,10 +60,12 @@ Open an Org file and run =M-x org-slides-start= (or =C-c s p= if you added the
 binding above).  The current slide is narrowed to the window and the text is
 enlarged.  If a slide is taller than the window, =n= first scrolls through it
 one screenful at a time; another =n= at the end moves to the next slide.
-=p= walks back through those pages.  At the last page of the last slide, =n=
-stays put and reports the end of the presentation instead of wrapping back to
-the start of the same slide.  Use the navigation keys below.  =q= or
-=C-c C-q= quits.
+=p= walks back through those pages.  Going back from the first page of a
+slide lands on the previous slide's last page, so =p= traverses every
+sub-page in reverse before reaching the slide start.  At the last page of the
+last slide, =n= stays put and reports the end of the presentation instead of
+wrapping back to the start of the same slide.  Use the navigation keys below.
+=q= or =C-c C-q= quits.
 
 For the experimental page-narrowing style, set:
 

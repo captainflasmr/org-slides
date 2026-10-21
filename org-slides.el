@@ -670,21 +670,44 @@ not replaced by the first page of the same slide."
             (org-slides--enter-slide))
         (message "Org Slides: end of presentation")))))
 
+(defun org-slides--show-last-scroll-page ()
+  "Page forward to the last screenful of the current slide."
+  (while (org-slides--next-page)))
+
+(defun org-slides--show-last-page-if-changed (old-start)
+  "Show the last page of the current slide when OLD-START differs.
+OLD-START is the logical start of the slide we came from.  If it is
+the same as the current slide, there was no previous slide to enter."
+  (when (and old-start
+             (markerp org-slides--logical-start)
+             (marker-position org-slides--logical-start)
+             (/= old-start (marker-position org-slides--logical-start)))
+    (if (eq org-slides-page-style 'split)
+        (when org-slides--split-pages
+          (org-slides--show-split-page
+           (1- (length org-slides--split-pages))))
+      (when (and org-slides-auto-page
+                 (not org-slides--one-big-page))
+        (org-slides--show-last-scroll-page)))))
+
 (defun org-slides-prev ()
   "Move to the previous page, or the previous top-level heading."
   (interactive)
   (unless (if (eq org-slides-page-style 'split)
               (org-slides--prev-split-page)
             (org-slides--prev-page))
-    (widen)
-    (if (org-current-level)
-        (progn
-          (org-slides-top)
-          (unless (org-get-previous-sibling)
-            (goto-char (point-min))))
-      (goto-char (point-min)))
-    (org-slides--narrow-or-widen)
-    (org-slides--enter-slide)))
+    (let ((old-start (and (markerp org-slides--logical-start)
+                          (marker-position org-slides--logical-start))))
+      (widen)
+      (if (org-current-level)
+          (progn
+            (org-slides-top)
+            (unless (org-get-previous-sibling)
+              (goto-char (point-min))))
+        (goto-char (point-min)))
+      (org-slides--narrow-or-widen)
+      (org-slides--enter-slide)
+      (org-slides--show-last-page-if-changed old-start))))
 
 (defun org-slides-beginning ()
   "Move to the first slide (the title slide, if there is one)."
