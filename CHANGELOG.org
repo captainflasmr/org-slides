@@ -26,6 +26,7 @@
 - Previous navigation from the first page of a slide now enters the previous slide at its last page and then walks backward through all of that slide's sub-pages.  Previously it skipped straight to the previous slide's first page.
 - Added incremental list-item stepping: unrevealed items use the new `org-slides-bullet-shadow` face; SPC reveals the next item and S-SPC shadows the previous one.  Nested items are stepped individually.  Controlled by `org-slides-incremental-bullets` (default t).
 - Reveal state is now persisted per slide and page, so revisiting a slide or sub-page restores exactly which items were revealed; n/p navigation no longer deselects them.
+- Added reliable backward-step alternatives for environments that deliver Shift+Space as plain Space: `b`, `S-TAB`, `Backspace`, and `C-c C-b`.  Added `f` as a forward-step alternative to SPC.
 
 * Version 0.1.0
 

@@ -320,6 +320,12 @@ Text two.
               #'org-slides-prev-or-self-insert))
   (should (eq (lookup-key org-slides-mode-map (kbd "S-SPC"))
               #'org-slides-step-backward-or-self-insert))
+  (should (eq (lookup-key org-slides-mode-map (kbd "f"))
+              #'org-slides-step-forward-or-self-insert))
+  (should (eq (lookup-key org-slides-mode-map (kbd "b"))
+              #'org-slides-step-backward-or-self-insert))
+  (should (eq (lookup-key org-slides-mode-map [backtab])
+              #'org-slides-step-backward-or-shifttab))
   (should (eq (lookup-key org-slides-mode-map (kbd "q"))
               #'org-slides-quit-or-self-insert)))
 

@@ -29,9 +29,9 @@ title slide.  Nested headings stay on their parent slide.
   window.  The end of the slide is never cut off; =n=/=p= move through the
   pages and then to the next/previous slide.
 - Org list items can be stepped through one at a time: unrevealed items use
-  the `org-slides-bullet-shadow' face, =SPC= reveals the next item, and
-  =S-SPC= puts the previous item back into shadow.  Nested list items are
-  stepped individually.
+  the `org-slides-bullet-shadow' face, =SPC= or =f= reveals the next item,
+  and =S-SPC= (or =b=/=S-TAB=/=Backspace=) puts the previous item back into
+  shadow.  Nested list items are stepped individually.
 - Experimental split-page mode (=org-slides-page-style= set to =split=)
   narrows to one computed page at a time, shows only that page's content,
   and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window,
@@ -88,8 +88,10 @@ nested heading so the heading starts the next page.
 
 | Key                 | Command                            |
 |---------------------+------------------------------------|
-| =SPC=               | Reveal next list item, then next page/slide |
+| =SPC= / =f=         | Reveal next list item, then next page/slide |
 | =S-SPC=             | Shadow previous list item, then previous page/slide |
+| =b= / =S-TAB= / =Backspace= | Same backward step (reliable alternatives) |
+| =C-c C-b=           | Shadow previous list item / go back |
 | =n=                 | Next page / next slide             |
 | =p=                 | Previous page / previous slide     |
 | =right=             | Next page / next slide             |
@@ -107,11 +109,17 @@ nested heading so the heading starts the next page.
 | =C-c C-1=           | Toggle the one-page view           |
 | =C-c <= / =C-c >=   | First/last slide                   |
 
-The letter, =SPC=, and =S-SPC= keys only navigate while the buffer is
+The letter, =SPC=, =f=, and =S-SPC= keys only navigate while the buffer is
 read-only.  Turn off =org-slides-read-only-on-start= or use =C-c C-w= to
 edit, then use the arrow keys or =C-c C-n= / =C-c C-p= to navigate.
+
+Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC=
+can trigger the forward step.  In that case use =b=, =S-TAB=, =Backspace=, or
+=C-c C-b= for the backward step; =b= and =Backspace= retain their normal
+editing behavior when the buffer is writable.
 =n=/=p= and the arrow keys move directly between pages or slides and bypass
-any unrevealed list items; =SPC=/=S-SPC= step through those items first.
+any unrevealed list items; =SPC=/=f= and =S-SPC=/=b= step through those items
+first.  In read-write mode, =f= inserts its character like any other letter.
 
 * Customization
 
@@ -127,7 +135,7 @@ any unrevealed list items; =SPC=/=S-SPC= step through those items first.
 (setq org-slides-page-style 'scroll)    ; or 'split (experimental)
 (setq org-slides-page-indicator 'always) ; 'split for only multi-page, nil off
 (setq org-slides-page-break-at-headings t)
-(setq org-slides-incremental-bullets t) ; SPC/S-SPC step through list items
+(setq org-slides-incremental-bullets t) ; SPC/f and S-SPC/b step items
 #+end_src
 
 Unrevealed list items use the =org-slides-bullet-shadow= face, which inherits
@@ -180,8 +188,8 @@ For example, refresh =org-table-fit= overlays after each slide change:
 - The previous text scale is restored on quit.
 - Tall slides are automatically paged in a single window; org-present just
   narrows to the slide and lets the overflow run off the bottom.
-- List items can be revealed one at a time with =SPC= and re-shadowed with
-  =S-SPC=; nested items step individually.
+- List items can be revealed one at a time with =SPC=/=f= and re-shadowed
+  with =S-SPC=/=b=; nested items step individually.
 - An experimental split-page style narrows to each computed page, shows only
   that page's content, and reports =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES=
   in the mode line.

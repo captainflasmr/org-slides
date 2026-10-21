@@ -242,8 +242,15 @@ Each function is called with the buffer name and current heading.")
     ;; editable when read-only mode is off.
     (define-key map (kbd "n") #'org-slides-next-or-self-insert)
     (define-key map (kbd "SPC") #'org-slides-step-forward-or-self-insert)
+    (define-key map (kbd "f") #'org-slides-step-forward-or-self-insert)
     (define-key map (kbd "p") #'org-slides-prev-or-self-insert)
     (define-key map (kbd "S-SPC") #'org-slides-step-backward-or-self-insert)
+    ;; Some GUI/terminal setups deliver Shift+Space as plain Space.  Keep
+    ;; unambiguous alternatives for stepping backward.
+    (define-key map (kbd "b") #'org-slides-step-backward-or-self-insert)
+    (define-key map [backtab] #'org-slides-step-backward-or-shifttab)
+    (define-key map [backspace] #'org-slides-step-backward-or-delete)
+    (define-key map (kbd "C-c C-b") #'org-slides-step-backward)
     (define-key map [right] #'org-slides-next)
     (define-key map [left] #'org-slides-prev)
     (define-key map [next] #'org-slides-next)
@@ -1173,6 +1180,22 @@ See `org-slides-next-or-self-insert' for ARG."
   (if buffer-read-only
       (org-slides-step-backward)
     (self-insert-command (or arg 1))))
+
+(defun org-slides-step-backward-or-shifttab (&optional arg)
+  "Shadow the previous list item, or run `org-shifttab' with ARG.
+The latter applies when the buffer is writable."
+  (interactive "p")
+  (if buffer-read-only
+      (org-slides-step-backward)
+    (org-shifttab (or arg 1))))
+
+(defun org-slides-step-backward-or-delete (&optional arg)
+  "Shadow the previous list item, or delete ARG characters backward.
+The latter applies when the buffer is writable."
+  (interactive "p")
+  (if buffer-read-only
+      (org-slides-step-backward)
+    (delete-char (- (or arg 1)))))
 
 (defun org-slides-next-or-self-insert (&optional arg)
   "Move to the next slide, or insert the typed character.
