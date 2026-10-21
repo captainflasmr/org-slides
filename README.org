@@ -3,50 +3,27 @@
 #+language: en
 #+options: toc:nil num:nil
 
-Minimalist presentation mode for Org buffers, derived from
-[[https://github.com/rlister/org-present][org-present]].
+Minimalist presentation mode for Org buffers, derived from [[https://github.com/rlister/org-present][org-present]].
 
-Each top-level heading is one slide; the text before the first heading is the
-title slide.  Nested headings stay on their parent slide.
+Each top-level heading is one slide; the text before the first heading is the title slide.  Nested headings stay on their parent slide.
 
 * Features
 
-- Default page/slide keys: =n= / right arrow forward, =p= / left arrow
-  backward.  =SPC= reveals the next list item and =S-SPC= re-shadows the
-  previous one; once the items are exhausted they advance/go back a page.
-  Revealed items stay revealed when revisiting a slide or sub-page.
+- Default page/slide keys: =n= / right arrow forward, =p= / left arrow backward.  =SPC= reveals the next list item and =S-SPC= re-shadows the previous one; once the items are exhausted they advance/go back a page.  Revealed items stay revealed when revisiting a slide or sub-page.
 - =q= quits, =g= and =G= jump to the first and last slide.
-- In read-write mode the letter, space, and quit keys insert their characters
-  instead, so the buffer remains editable.  =C-c C-n= and =C-c C-p= always
-  navigate.
-- Hides leading heading stars, complete =#+= keyword lines, and emphasis
-  markers.  Hiding a complete =#+= line also hides its newline, so
-  =#+begin_src= / =#+end_src= delimiters do not leave blank lines around
-  source blocks.
-- Literal =#+= lines inside source, example, export, comment, quote, verse,
-  center, special, and dynamic blocks are left visible.
-- Long slides are paged automatically, one screenful at a time, in the same
-  window.  The end of the slide is never cut off; =n=/=p= move through the
-  pages and then to the next/previous slide.
-- Org list items can be stepped through one at a time: unrevealed items use
-  the `org-slides-bullet-shadow' face, =SPC= or =f= reveals the next item,
-  and =S-SPC= (or =b=/=S-TAB=/=Backspace=) puts the previous item back into
-  shadow.  Nested list items are stepped individually.
-- Experimental split-page mode (=org-slides-page-style= set to =split=)
-  narrows to one computed page at a time, shows only that page's content,
-  and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window,
-  prefer to start at a nested heading, and can be recomputed after a resize
-  or text-scale change.
+- In read-write mode the letter, space, and quit keys insert their characters instead, so the buffer remains editable.  =C-c C-n= and =C-c C-p= always navigate.
+- Hides leading heading stars, complete =#+= keyword lines, and emphasis markers.  Hiding a complete =#+= line also hides its newline, so =#+begin_src= / =#+end_src= delimiters do not leave blank lines around source blocks.
+- Literal =#+= lines inside source, example, export, comment, quote, verse, center, special, and dynamic blocks are left visible.
+- Long slides are paged automatically, one screenful at a time, in the same window.  The end of the slide is never cut off; =n=/=p= move through the pages and then to the next/previous slide.
+- Org list items can be stepped through one at a time: unrevealed items use the `org-slides-bullet-shadow' face, =SPC= or =f= reveals the next item, and =S-SPC= (or =b=/=S-TAB=/=Backspace=) puts the previous item back into shadow.  Nested list items are stepped individually.
+- Experimental split-page mode (=org-slides-page-style= set to =split=) narrows to one computed page at a time, shows only that page's content, and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window, prefer to start at a nested heading, and can be recomputed after a resize or text-scale change.
 - The text scale in use before the presentation is restored on quit.
-- Overlay and cursor state is buffer-local, so multiple presentations do not
-  clobber each other.
-- Optional one-page view with =C-c C-1=; this disables automatic paging and
-  shows the whole buffer.
+- Overlay and cursor state is buffer-local, so multiple presentations do not clobber each other.
+- Optional one-page view with =C-c C-1=; this disables automatic paging and shows the whole buffer.
 
 * Installation
 
-Requires Emacs 27.1+ and Org 9.4+.  The package is a single file.  Add its
-directory to =load-path= or use =use-package=:
+Requires Emacs 27.1+ and Org 9.4+.  The package is a single file.  Add its directory to =load-path= or use =use-package=:
 
 #+begin_src emacs-lisp
 (use-package org-slides
@@ -56,22 +33,11 @@ directory to =load-path= or use =use-package=:
               ("C-c s p" . org-slides-start)))
 #+end_src
 
-In the offline toolkit the package lives under
-=local-packages/org-slides= and is loaded automatically by the rendered
-=init.el= when present.
+In the offline toolkit the package lives under =local-packages/org-slides= and is loaded automatically by the rendered =init.el= when present.
 
 * Usage
 
-Open an Org file and run =M-x org-slides-start= (or =C-c s p= if you added the
-binding above).  The current slide is narrowed to the window and the text is
-enlarged.  If a slide is taller than the window, =n= first scrolls through it
-one screenful at a time; another =n= at the end moves to the next slide.
-=p= walks back through those pages.  Going back from the first page of a
-slide lands on the previous slide's last page, so =p= traverses every
-sub-page in reverse before reaching the slide start.  At the last page of the
-last slide, =n= stays put and reports the end of the presentation instead of
-wrapping back to the start of the same slide.  Use the navigation keys below.
-=q= or =C-c C-q= quits.
+Open an Org file and run =M-x org-slides-start= (or =C-c s p= if you added the binding above).  The current slide is narrowed to the window and the text is enlarged.  If a slide is taller than the window, =n= first scrolls through it one screenful at a time; another =n= at the end moves to the next slide.  =p= walks back through those pages.  Going back from the first page of a slide lands on the previous slide's last page, so =p= traverses every sub-page in reverse before reaching the slide start.  At the last page of the last slide, =n= stays put and reports the end of the presentation instead of wrapping back to the start of the same slide.  Use the navigation keys below.  =q= or =C-c C-q= quits.
 
 For the experimental page-narrowing style, set:
 
@@ -79,47 +45,36 @@ For the experimental page-narrowing style, set:
 (setq org-slides-page-style 'split)
 #+end_src
 
-Each tall slide is then split into pages that fit the window.  Only the
-current page's content is displayed, and the mode line shows =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =1.2 / 5.3=).  The total slide count is the number of top-level headings; the title page is slide 0 and is not included in that total.  By default the indicator is shown on every slide, including single-page slides and the title slide; set =org-slides-page-indicator= to =split= to show it only when a slide has more than one page.
-Pages break at line boundaries; when possible, a break is moved back to a
-nested heading so the heading starts the next page.
+Each tall slide is then split into pages that fit the window.  Only the current page's content is displayed, and the mode line shows =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =1.2 / 5.3=).  The total slide count is the number of top-level headings; the title page is slide 0 and is not included in that total.  By default the indicator is shown on every slide, including single-page slides and the title slide; set =org-slides-page-indicator= to =split= to show it only when a slide has more than one page.  Pages break at line boundaries; when possible, a break is moved back to a nested heading so the heading starts the next page.
 
 * Default keys
 
-| Key                 | Command                            |
-|---------------------+------------------------------------|
-| =SPC= / =f=         | Reveal next list item, then next page/slide |
-| =S-SPC=             | Shadow previous list item, then previous page/slide |
-| =b= / =S-TAB= / =Backspace= | Same backward step (reliable alternatives) |
-| =C-c C-b=           | Shadow previous list item / go back |
-| =n=                 | Next page / next slide             |
-| =p=                 | Previous page / previous slide     |
-| =right=             | Next page / next slide             |
-| =left=              | Previous page / previous slide     |
-| =next=              | Next page / next slide             |
-| =prior=             | Previous page / previous slide     |
-| =g=                 | First slide                        |
-| =G=                 | Last slide                         |
-| =q=                 | Quit                               |
-| =C-c C-n=           | Next page / next slide             |
-| =C-c C-p=           | Previous page / previous slide     |
-| =C-c C-q=           | Quit                               |
-| =C-c C-= / C-c C--= | Increase/decrease text size        |
-| =C-c C-r / C-c C-w= | Read-only / read-write             |
-| =C-c C-1=           | Toggle the one-page view           |
-| =C-c <= / =C-c >=   | First/last slide                   |
+| Key                         | Command                                             |
+|-----------------------------+-----------------------------------------------------|
+| =SPC= / =f=                 | Reveal next list item, then next page/slide         |
+| =S-SPC=                     | Shadow previous list item, then previous page/slide |
+| =b= / =S-TAB= / =Backspace= | Same backward step (reliable alternatives)          |
+| =C-c C-b=                   | Shadow previous list item / go back                 |
+| =n=                         | Next page / next slide                              |
+| =p=                         | Previous page / previous slide                      |
+| =right=                     | Next page / next slide                              |
+| =left=                      | Previous page / previous slide                      |
+| =next=                      | Next page / next slide                              |
+| =prior=                     | Previous page / previous slide                      |
+| =g=                         | First slide                                         |
+| =G=                         | Last slide                                          |
+| =q=                         | Quit                                                |
+| =C-c C-n=                   | Next page / next slide                              |
+| =C-c C-p=                   | Previous page / previous slide                      |
+| =C-c C-q=                   | Quit                                                |
+| =C-c C-= / C-c C--=         | Increase/decrease text size                         |
+| =C-c C-r / C-c C-w=         | Read-only / read-write                              |
+| =C-c C-1=                   | Toggle the one-page view                            |
+| =C-c <= / =C-c >=           | First/last slide                                    |
 
-The letter, =SPC=, =f=, and =S-SPC= keys only navigate while the buffer is
-read-only.  Turn off =org-slides-read-only-on-start= or use =C-c C-w= to
-edit, then use the arrow keys or =C-c C-n= / =C-c C-p= to navigate.
+The letter, =SPC=, =f=, and =S-SPC= keys only navigate while the buffer is read-only.  Turn off =org-slides-read-only-on-start= or use =C-c C-w= to edit, then use the arrow keys or =C-c C-n= / =C-c C-p= to navigate.
 
-Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC=
-can trigger the forward step.  In that case use =b=, =S-TAB=, =Backspace=, or
-=C-c C-b= for the backward step; =b= and =Backspace= retain their normal
-editing behavior when the buffer is writable.
-=n=/=p= and the arrow keys move directly between pages or slides and bypass
-any unrevealed list items; =SPC=/=f= and =S-SPC=/=b= step through those items
-first.  In read-write mode, =f= inserts its character like any other letter.
+Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC= can trigger the forward step.  In that case use =b=, =S-TAB=, =Backspace=, or =C-c C-b= for the backward step; =b= and =Backspace= retain their normal editing behavior when the buffer is writable.  =n=/=p= and the arrow keys move directly between pages or slides and bypass any unrevealed list items; =SPC=/=f= and =S-SPC=/=b= step through those items first.  In read-write mode, =f= inserts its character like any other letter.
 
 * Customization
 
@@ -138,22 +93,11 @@ first.  In read-write mode, =f= inserts its character like any other letter.
 (setq org-slides-incremental-bullets t) ; SPC/f and S-SPC/b step items
 #+end_src
 
-Unrevealed list items use the =org-slides-bullet-shadow= face, which inherits
-=shadow= by default.  Customize that face to change the dimmed text.  Set
-=org-slides-incremental-bullets= to =nil= to reveal all list items at once.
-With split-page mode, items are collected per page; with scroll pagination,
-they are collected for the whole logical slide.  Reveal state is stored per
-slide and page, so once an item has been revealed it stays revealed when you
-navigate away and return with =n=/=p= or =SPC=/=S-SPC=.
+Unrevealed list items use the =org-slides-bullet-shadow= face, which inherits =shadow= by default.  Customize that face to change the dimmed text.  Set =org-slides-incremental-bullets= to =nil= to reveal all list items at once.  With split-page mode, items are collected per page; with scroll pagination, they are collected for the whole logical slide.  Reveal state is stored per slide and page, so once an item has been revealed it stays revealed when you navigate away and return with =n=/=p= or =SPC=/=S-SPC=.
 
-=org-slides-page-indicator= accepts =always= (default: every slide,
-including single-page slides and the title slide), =split= (only when a slide
-has more than one page), or =nil=.  The indicator belongs to the split-page
-style; scroll mode does not show page numbers.
+=org-slides-page-indicator= accepts =always= (default: every slide, including single-page slides and the title slide), =split= (only when a slide has more than one page), or =nil=.  The indicator belongs to the split-page style; scroll mode does not show page numbers.
 
-=org-slides-page-indicator-format= controls the mode-line format.  Its four
-arguments are current slide, current page, total slides, and total pages in
-the current slide:
+=org-slides-page-indicator-format= controls the mode-line format.  Its four arguments are current slide, current page, total slides, and total pages in the current slide:
 
 #+begin_src emacs-lisp
 (setq org-slides-page-indicator-format "%d.%d / %d.%d") ; default
@@ -162,9 +106,7 @@ the current slide:
 * Hooks
 
 - =org-slides-mode-hook= runs when the minor mode is enabled or disabled.
-- =org-slides-after-navigate-functions= is an abnormal hook called with the
-  buffer name and current heading after the presentation starts or changes
-  slides.  It is not called when moving between pages of the same slide.
+- =org-slides-after-navigate-functions= is an abnormal hook called with the buffer name and current heading after the presentation starts or changes slides.  It is not called when moving between pages of the same slide.
 
 For example, refresh =org-table-fit= overlays after each slide change:
 
@@ -179,30 +121,18 @@ For example, refresh =org-table-fit= overlays after each slide change:
 * Differences from org-present
 
 - Backward navigation is bound by default to =p= and the left arrow; =S-SPC= steps backward through list-item reveals and then pages.
-- Navigation keys are editable-aware: they insert characters when the buffer
-  is writable and navigate when it is read-only.
-- Complete =#+= lines are hidden together with their newlines, removing the
-  blank lines upstream leaves around source-block delimiters.
+- Navigation keys are editable-aware: they insert characters when the buffer is writable and navigate when it is read-only.
+- Complete =#+= lines are hidden together with their newlines, removing the blank lines upstream leaves around source-block delimiters.
 - Literal =#+= lines inside block contents are not hidden.
 - Overlay lists and cursor caches are buffer-local.
 - The previous text scale is restored on quit.
-- Tall slides are automatically paged in a single window; org-present just
-  narrows to the slide and lets the overflow run off the bottom.
-- List items can be revealed one at a time with =SPC=/=f= and re-shadowed
-  with =S-SPC=/=b=; nested items step individually.
-- An experimental split-page style narrows to each computed page, shows only
-  that page's content, and reports =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES=
-  in the mode line.
+- Tall slides are automatically paged in a single window; org-present just narrows to the slide and lets the overflow run off the bottom.
+- List items can be revealed one at a time with =SPC=/=f= and re-shadowed with =S-SPC=/=b=; nested items step individually.
+- An experimental split-page style narrows to each computed page, shows only that page's content, and reports =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= in the mode line.
 - The one-page view is respected by next/previous navigation.
-- Modern Org calls are used (=org-get-previous-sibling=,
-  =outline-show-all=).
-- Setup and teardown are handled by the minor mode itself, so no mode hooks
-  are required just to display images, hide the cursor, or make the buffer
-  read-only.
+- Modern Org calls are used (=org-get-previous-sibling=, =outline-show-all=).
+- Setup and teardown are handled by the minor mode itself, so no mode hooks are required just to display images, hide the cursor, or make the buffer read-only.
 
 * License and attribution
 
-GPL-3.0-or-later.  This package is derived from =org-present.el= by Ric
-Lister (https://github.com/rlister/org-present), which is itself based on the
-original org-present work.  The original copyright and license notices are
-retained in =org-slides.el= and the full license text is in =LICENSE=.
+GPL-3.0-or-later.  This package is derived from =org-present.el= by Ric Lister (https://github.com/rlister/org-present), which is itself based on the original org-present work.  The original copyright and license notices are retained in =org-slides.el= and the full license text is in =LICENSE=.

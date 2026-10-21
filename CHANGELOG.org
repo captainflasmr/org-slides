@@ -6,20 +6,10 @@
 * Unreleased
 
 ** Added
-- Automatic pagination for slides taller than the window: =n=/=p= (and the
-  other navigation keys) first move by one screenful inside the current
-  slide, then move to the next/previous slide.  Everything stays in one
-  window; the original window start is restored on quit.
-- New option =org-slides-auto-page= (default =t=).  Set it to =nil= to go
-  straight from slide to slide even when a slide overflows the window.
-- Page positions are tracked with markers, so editing does not invalidate the
-  page history.
-- Experimental split-page mode via =org-slides-page-style= =split=: each page
-  is a separate narrowed region containing only that page's content.  Page
-  ranges are computed from the rendered window height, prefer starting at a
-  nested heading, and are recomputed after window-size and text-scale
-  changes.  =org-slides-page-indicator= shows =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= in the mode line on every slide by default, including single-page slides; the title page is slide 0 and top-level headings are numbered in document order.
-  =org-slides-page-break-at-headings= controls the heading preference.
+- Automatic pagination for slides taller than the window: =n=/=p= (and the other navigation keys) first move by one screenful inside the current slide, then move to the next/previous slide.  Everything stays in one window; the original window start is restored on quit.
+- New option =org-slides-auto-page= (default =t=).  Set it to =nil= to go straight from slide to slide even when a slide overflows the window.
+- Page positions are tracked with markers, so editing does not invalidate the page history.
+- Experimental split-page mode via =org-slides-page-style= =split=: each page is a separate narrowed region containing only that page's content.  Page ranges are computed from the rendered window height, prefer starting at a nested heading, and are recomputed after window-size and text-scale changes.  =org-slides-page-indicator= shows =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= in the mode line on every slide by default, including single-page slides; the title page is slide 0 and top-level headings are numbered in document order.  =org-slides-page-break-at-headings= controls the heading preference.
 - The original =mode-line-process= and window start are restored on quit.
 - New =org-slides-page-indicator-format= controls the mode-line SLIDE.PAGE/totals format.
 - Next navigation at the end of the last slide now stays on the final page instead of resetting that slide to page 0 and appearing to bounce between the last pages.
@@ -30,41 +20,26 @@
 
 * Version 0.1.0
 
-Initial fork of [[https://github.com/rlister/org-present][org-present]] (upstream commit
-=4ec04e1b77dea76d7c30066ccf3200d2e0b7bee9=).
+Initial fork of [[https://github.com/rlister/org-present][org-present]] (upstream commit =4ec04e1b77dea76d7c30066ccf3200d2e0b7bee9=).
 
 ** Added
-- Default navigation keys: =n= / =SPC= / right arrow forward and
-  =p= / =S-SPC= / left arrow backward.
-- =q= quits, =g= / =G= jump to the first/last slide, and =C-c C-1= toggles the
-  one-page view.
-- Navigation keys are editable-aware: they insert their characters when the
-  buffer is read-write and navigate when it is read-only.
-- =org-slides-mode= now performs setup and teardown itself: overlays, inline
-  images, text scale, read-only mode, and cursor hiding.
-- Customization options =org-slides-text-scale=, =org-slides-scale-on-start=,
-  =org-slides-display-inline-images=, =org-slides-read-only-on-start=,
-  =org-slides-hide-cursor-on-start=, =org-slides-hide-stars-in-headings=, and
-  =org-slides-startup-folded=.
-- =org-slides-after-navigate-functions= abnormal hook, called with the buffer
-  name and current heading.
+- Default navigation keys: =n= / =SPC= / right arrow forward and =p= / =S-SPC= / left arrow backward.
+- =q= quits, =g= / =G= jump to the first/last slide, and =C-c C-1= toggles the one-page view.
+- Navigation keys are editable-aware: they insert their characters when the buffer is read-write and navigate when it is read-only.
+- =org-slides-mode= now performs setup and teardown itself: overlays, inline images, text scale, read-only mode, and cursor hiding.
+- Customization options =org-slides-text-scale=, =org-slides-scale-on-start=, =org-slides-display-inline-images=, =org-slides-read-only-on-start=, =org-slides-hide-cursor-on-start=, =org-slides-hide-stars-in-headings=, and =org-slides-startup-folded=.
+- =org-slides-after-navigate-functions= abnormal hook, called with the buffer name and current heading.
 - ERT test suite under =test/org-slides-test.el=.
 
 ** Fixed
-- Hiding a complete =#+= line now includes the trailing newline, so
-  =#+begin_src= / =#+end_src= delimiters no longer leave blank lines around
-  source blocks.
+- Hiding a complete =#+= line now includes the trailing newline, so =#+begin_src= / =#+end_src= delimiters no longer leave blank lines around source blocks.
 - Literal =#+= lines inside block contents are left visible.
-- Exporter option detection (=#+TITLE:=, =#+AUTHOR:=, =#+DATE:=, =#+EMAIL:=)
-  is case-insensitive.
+- Exporter option detection (=#+TITLE:=, =#+AUTHOR:=, =#+DATE:=, =#+EMAIL:=) is case-insensitive.
 - Overlay lists and cursor caches are buffer-local.
 - The text scale in use before the presentation is restored on quit.
-- =org-slides-next= and =org-slides-prev= respect the one-page view instead of
-  narrowing again immediately.
+- =org-slides-next= and =org-slides-prev= respect the one-page view instead of narrowing again immediately.
 - Previous navigation from the first slide returns to the title slide.
-- Replaced obsolete =org-get-last-sibling= and =show-all= calls with
-  =org-get-previous-sibling= and =outline-show-all=.
+- Replaced obsolete =org-get-last-sibling= and =show-all= calls with =org-get-previous-sibling= and =outline-show-all=.
 
 ** Changed
-- Renamed the package, mode, commands, options, hooks, and internal state from
-  the =org-present= names to the =org-slides= names.
+- Renamed the package, mode, commands, options, hooks, and internal state from the =org-present= names to the =org-slides= names.
