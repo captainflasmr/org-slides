@@ -155,6 +155,20 @@ heading that still leaves the preceding page at least half full."
   :type 'boolean
   :group 'org-slides)
 
+(defcustom org-slides-incremental-bullets t
+  "Whether to show Org list items one at a time.
+When non-nil, list items on the current page are displayed with the
+`org-slides-bullet-shadow' face.  SPC reveals the next item; S-SPC
+puts the previous item back into shadow.  Once every item is revealed,
+SPC advances to the next page or slide."
+  :type 'boolean
+  :group 'org-slides)
+
+(defface org-slides-bullet-shadow
+  '((t (:inherit shadow)))
+  "Face used for Org list items that have not been revealed yet."
+  :group 'org-slides)
+
 (defvar org-slides-mode nil
   "Non-nil when `org-slides-mode' is active in the current buffer.")
 
@@ -207,6 +221,18 @@ Each function is called with the buffer name and current heading.")
 (defvar-local org-slides--original-mode-line-process nil
   "Value of `mode-line-process' before the presentation began.")
 
+(defvar-local org-slides--bullet-ranges nil
+  "Vector of (START . END) markers for the current page's list items.")
+
+(defvar-local org-slides--bullet-overlays nil
+  "Vector of shadow overlays parallel to `org-slides--bullet-ranges'.")
+
+(defvar-local org-slides--bullet-index 0
+  "Number of list items revealed on the current page.")
+
+(defvar-local org-slides--bullet-state nil
+  "Hash table mapping (SLIDE-START . PAGE) to revealed item counts.")
+
 (defvar-local org-slides--original-window-start nil
   "Marker for the window start before the presentation began.")
 
@@ -215,9 +241,9 @@ Each function is called with the buffer name and current heading.")
     ;; Forward/backward.  The -or-self-insert commands keep the buffer
     ;; editable when read-only mode is off.
     (define-key map (kbd "n") #'org-slides-next-or-self-insert)
-    (define-key map (kbd "SPC") #'org-slides-next-or-self-insert)
+    (define-key map (kbd "SPC") #'org-slides-step-forward-or-self-insert)
     (define-key map (kbd "p") #'org-slides-prev-or-self-insert)
-    (define-key map (kbd "S-SPC") #'org-slides-prev-or-self-insert)
+    (define-key map (kbd "S-SPC") #'org-slides-step-backward-or-self-insert)
     (define-key map [right] #'org-slides-next)
     (define-key map [left] #'org-slides-prev)
     (define-key map [next] #'org-slides-next)
@@ -518,14 +544,16 @@ PAGE-COUNT is the number of pages in the current slide."
     (org-slides--restore-page-indicator)))
 
 (defun org-slides--clear-pagination ()
-  "Clear both scroll-page and split-page state."
+  "Clear scroll-page, split-page, and bullet stepping state."
   (org-slides--clear-page-markers)
   (org-slides--clear-split-pages)
+  (org-slides--clear-bullets)
   (setq org-slides--page-index 0)
   (org-slides--restore-page-indicator))
 
-(defun org-slides--show-split-page (index)
-  "Show split page INDEX, narrowed to that page only."
+(defun org-slides--show-split-page (index &optional revealed)
+  "Show split page INDEX, narrowed to that page only.
+When REVEALED is non-nil, start with all list items in the foreground."
   (let ((page (nth index org-slides--split-pages)))
     (when page
       (let ((start (and (markerp (car page))
@@ -539,12 +567,14 @@ PAGE-COUNT is the number of pages in the current slide."
           (setq org-slides--page-index index)
           (when-let* ((window (org-slides--presentation-window)))
             (set-window-start window start))
+          (org-slides--setup-bullets revealed)
           (org-slides--update-page-indicator)
           t)))))
 
-(defun org-slides--setup-split-pages (&optional index)
+(defun org-slides--setup-split-pages (&optional index revealed)
   "Compute split pages for the current slide and show page INDEX.
-The mode-line indicator does not affect the text height."
+The mode-line indicator does not affect the text height.  When
+REVEALED is non-nil, start with list items in the foreground."
   (org-slides--clear-split-pages)
   (org-slides--restore-page-indicator)
   (org-slides--widen-logical)
@@ -554,8 +584,9 @@ The mode-line indicator does not affect the text height."
     (if (zerop count)
         (progn
           (setq org-slides--page-index 0)
-          (org-slides--restore-page-indicator))
-      (org-slides--show-split-page index))))
+          (org-slides--restore-page-indicator)
+          (org-slides--clear-bullets))
+      (org-slides--show-split-page index revealed))))
 
 (defun org-slides--next-split-page ()
   "Show the next split page, returning non-nil on success."
@@ -567,12 +598,12 @@ The mode-line indicator does not affect the text height."
     (org-slides--show-split-page (1+ org-slides--page-index))))
 
 (defun org-slides--prev-split-page ()
-  "Show the previous split page, returning non-nil on success."
+  "Show the previous split page with all list items revealed."
   (when (and org-slides-auto-page
              (eq org-slides-page-style 'split)
              (not org-slides--one-big-page)
              (> org-slides--page-index 0))
-    (org-slides--show-split-page (1- org-slides--page-index))))
+    (org-slides--show-split-page (1- org-slides--page-index) t)))
 
 (defun org-slides--refresh-split-pages (&optional _frame)
   "Recompute split pages after the window size or a face change."
@@ -615,6 +646,140 @@ The mode-line indicator does not affect the text height."
           nil)))
     (nreverse numbers)))
 
+(defun org-slides--item-own-end (item)
+  "Return the end of ITEM's own text, before any nested list."
+  (let (child-begin)
+    (dolist (child (org-element-contents item))
+      (when (and (not child-begin)
+                 (eq (org-element-type child) 'plain-list))
+        (setq child-begin (org-element-property :begin child))))
+    (or child-begin
+        (org-element-property :contents-end item)
+        (org-element-property :end item))))
+
+(defun org-slides--collect-bullet-ranges ()
+  "Return list items in the accessible buffer as (START . END) markers."
+  (let (ranges)
+    (org-element-map (org-element-parse-buffer) 'item
+      (lambda (item)
+        (let ((begin (org-element-property :begin item))
+              (end (org-slides--item-own-end item)))
+          (when (and begin end (< begin end))
+            (push (cons (copy-marker begin) (copy-marker end)) ranges)))
+        nil))
+    (nreverse ranges)))
+
+(defun org-slides--make-bullet-overlay (range)
+  "Create a shadow overlay for list-item RANGE."
+  (let ((start (and (markerp (car range))
+                    (marker-position (car range))))
+        (end (and (markerp (cdr range))
+                  (marker-position (cdr range)))))
+    (when (and start end (< start end))
+      (let ((overlay (make-overlay start end)))
+        (overlay-put overlay 'face 'org-slides-bullet-shadow)
+        (overlay-put overlay 'evaporate t)
+        overlay))))
+
+(defun org-slides--clear-bullets ()
+  "Remove list-item shadow overlays and release their markers."
+  (when (vectorp org-slides--bullet-overlays)
+    (dotimes (i (length org-slides--bullet-overlays))
+      (let ((overlay (aref org-slides--bullet-overlays i)))
+        (when (and (overlayp overlay)
+                   (overlay-buffer overlay))
+          (delete-overlay overlay)))))
+  (when (vectorp org-slides--bullet-ranges)
+    (dotimes (i (length org-slides--bullet-ranges))
+      (let ((range (aref org-slides--bullet-ranges i)))
+        (when (markerp (car range))
+          (set-marker (car range) nil))
+        (when (markerp (cdr range))
+          (set-marker (cdr range) nil)))))
+  (setq org-slides--bullet-ranges nil
+        org-slides--bullet-overlays nil
+        org-slides--bullet-index 0))
+
+(defun org-slides--bullet-state-key ()
+  "Return the persistence key for the current slide and page."
+  (let ((slide (or (and (markerp org-slides--logical-start)
+                        (marker-position org-slides--logical-start))
+                   (point-min))))
+    (if (eq org-slides-page-style 'split)
+        (cons slide org-slides--page-index)
+      (cons slide 'scroll))))
+
+(defun org-slides--save-bullet-state ()
+  "Store the current number of revealed list items."
+  (when (and (hash-table-p org-slides--bullet-state)
+             (markerp org-slides--logical-start)
+             (marker-position org-slides--logical-start))
+    (puthash (org-slides--bullet-state-key)
+             org-slides--bullet-index
+             org-slides--bullet-state)))
+
+(defun org-slides--setup-bullets (revealed)
+  "Set up list-item stepping for the current page.
+REVEALED is the default for a page not visited before: non-nil means
+all items start in the foreground, nil means they start shadowed.
+A previously saved reveal count is always restored."
+  (org-slides--clear-bullets)
+  (when org-slides-incremental-bullets
+    (let* ((ranges (vconcat (org-slides--collect-bullet-ranges)))
+           (count (length ranges))
+           (key (org-slides--bullet-state-key))
+           (saved (and (hash-table-p org-slides--bullet-state)
+                       (gethash key org-slides--bullet-state 'missing)))
+           (index (if (eq saved 'missing)
+                      (if revealed count 0)
+                    (max 0 (min saved count))))
+           (overlays (make-vector count nil)))
+      (setq org-slides--bullet-ranges ranges
+            org-slides--bullet-overlays overlays
+            org-slides--bullet-index index)
+      (when (hash-table-p org-slides--bullet-state)
+        (puthash key index org-slides--bullet-state))
+      (dotimes (i count)
+        (when (>= i index)
+          (aset overlays i (org-slides--make-bullet-overlay (aref ranges i)))))
+      (force-window-update (current-buffer)))))
+
+(defun org-slides--reveal-next-bullet ()
+  "Reveal the next shadowed list item.  Return non-nil on success."
+  (when (and org-slides-incremental-bullets
+             (vectorp org-slides--bullet-ranges)
+             (< org-slides--bullet-index
+                (length org-slides--bullet-ranges)))
+    (let ((index org-slides--bullet-index)
+          (overlay (aref org-slides--bullet-overlays
+                         org-slides--bullet-index)))
+      (when (and (overlayp overlay)
+                 (overlay-buffer overlay))
+        (delete-overlay overlay))
+      (aset org-slides--bullet-overlays index nil)
+      (setq org-slides--bullet-index (1+ index))
+      (org-slides--save-bullet-state)
+      (force-window-update (current-buffer))
+      t)))
+
+(defun org-slides--hide-previous-bullet ()
+  "Put the last revealed list item back into shadow.
+Return non-nil on success."
+  (when (and org-slides-incremental-bullets
+             (vectorp org-slides--bullet-ranges)
+             (> org-slides--bullet-index 0))
+    (let* ((index (1- org-slides--bullet-index))
+           (overlay (aref org-slides--bullet-overlays index)))
+      (setq org-slides--bullet-index index)
+      (unless (and (overlayp overlay)
+                   (overlay-buffer overlay))
+        (aset org-slides--bullet-overlays index
+              (org-slides--make-bullet-overlay
+               (aref org-slides--bullet-ranges index))))
+      (org-slides--save-bullet-state)
+      (force-window-update (current-buffer))
+      t)))
+
 (defun org-slides--compute-slide-number ()
   "Return the ordinal of the current top-level heading.
 The title page before the first heading is slide 0."
@@ -631,19 +796,25 @@ The title page before the first heading is slide 0."
               (setq number (cdr entry))
             (throw 'done number)))))))
 
-(defun org-slides--enter-slide ()
-  "Run navigation hooks and show the first page of the current slide."
+(defun org-slides--enter-slide (&optional revealed)
+  "Run navigation hooks and show the first page of the current slide.
+When REVEALED is non-nil, list items start in the foreground."
   (org-slides--clear-pagination)
   (when (and (eq org-slides-page-style 'split)
              org-slides-page-indicator
              (not org-slides--one-big-page))
     (setq org-slides--slide-number (org-slides--compute-slide-number)))
   (org-slides-run-after-navigate-functions)
-  (when (and org-slides-auto-page
-             (not org-slides--one-big-page))
-    (if (eq org-slides-page-style 'split)
-        (org-slides--setup-split-pages 0)
-      (org-slides--reset-pages))))
+  (cond
+   (org-slides--one-big-page
+    (org-slides--clear-bullets))
+   ((and org-slides-auto-page
+         (eq org-slides-page-style 'split))
+    (org-slides--setup-split-pages 0 revealed))
+   (t
+    (when org-slides-auto-page
+      (org-slides--reset-pages))
+    (org-slides--setup-bullets revealed))))
 
 (defun org-slides-next ()
   "Move to the next page, or the next top-level heading.
@@ -685,7 +856,7 @@ the same as the current slide, there was no previous slide to enter."
     (if (eq org-slides-page-style 'split)
         (when org-slides--split-pages
           (org-slides--show-split-page
-           (1- (length org-slides--split-pages))))
+           (1- (length org-slides--split-pages)) t))
       (when (and org-slides-auto-page
                  (not org-slides--one-big-page))
         (org-slides--show-last-scroll-page)))))
@@ -706,7 +877,10 @@ the same as the current slide, there was no previous slide to enter."
               (goto-char (point-min))))
         (goto-char (point-min)))
       (org-slides--narrow-or-widen)
-      (org-slides--enter-slide)
+      (let ((new-start (and (markerp org-slides--logical-start)
+                            (marker-position org-slides--logical-start))))
+        (org-slides--enter-slide
+         (and old-start new-start (/= old-start new-start))))
       (org-slides--show-last-page-if-changed old-start))))
 
 (defun org-slides-beginning ()
@@ -882,7 +1056,8 @@ example block visible."
   (unless org-slides--started
     (setq org-slides--started t
           org-slides--one-big-page nil
-          org-slides--slide-number 0)
+          org-slides--slide-number 0
+          org-slides--bullet-state (make-hash-table :test 'equal))
     (org-slides--clear-slide-numbers)
     (setq org-slides--original-mode-line-process mode-line-process)
     (org-slides--clear-pagination)
@@ -924,7 +1099,8 @@ example block visible."
     (setq buffer-read-only org-slides--previous-read-only)
     (setq org-slides--cursor-cache nil
           org-slides--one-big-page nil
-          org-slides--slide-number 0)
+          org-slides--slide-number 0
+          org-slides--bullet-state nil)
     (remove-hook 'text-scale-mode-hook
                  #'org-slides--refresh-split-pages t)
     (remove-hook 'buffer-face-mode-hook
@@ -967,6 +1143,36 @@ Each top-level heading is one slide.  Use `org-slides-start' to begin."
   "Quit the current Org presentation."
   (interactive)
   (org-slides-mode -1))
+
+(defun org-slides-step-forward ()
+  "Reveal the next list item, then advance a page or slide."
+  (interactive)
+  (unless (org-slides--reveal-next-bullet)
+    (org-slides-next)))
+
+(defun org-slides-step-backward ()
+  "Shadow the previous list item, then go back a page or slide."
+  (interactive)
+  (unless (org-slides--hide-previous-bullet)
+    (org-slides-prev)))
+
+(defun org-slides-step-forward-or-self-insert (&optional arg)
+  "Reveal the next list item, or insert the typed character.
+With prefix ARG, insert that many characters when the buffer is
+writable.  See `org-slides-next-or-self-insert' for the read-only
+behavior."
+  (interactive "p")
+  (if buffer-read-only
+      (org-slides-step-forward)
+    (self-insert-command (or arg 1))))
+
+(defun org-slides-step-backward-or-self-insert (&optional arg)
+  "Shadow the previous list item, or insert the typed character.
+See `org-slides-next-or-self-insert' for ARG."
+  (interactive "p")
+  (if buffer-read-only
+      (org-slides-step-backward)
+    (self-insert-command (or arg 1))))
 
 (defun org-slides-next-or-self-insert (&optional arg)
   "Move to the next slide, or insert the typed character.

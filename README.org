@@ -11,8 +11,10 @@ title slide.  Nested headings stay on their parent slide.
 
 * Features
 
-- Default forward/backward keys: =n= / =SPC= / right arrow forward,
-  =p= / =S-SPC= / left arrow backward.
+- Default page/slide keys: =n= / right arrow forward, =p= / left arrow
+  backward.  =SPC= reveals the next list item and =S-SPC= re-shadows the
+  previous one; once the items are exhausted they advance/go back a page.
+  Revealed items stay revealed when revisiting a slide or sub-page.
 - =q= quits, =g= and =G= jump to the first and last slide.
 - In read-write mode the letter, space, and quit keys insert their characters
   instead, so the buffer remains editable.  =C-c C-n= and =C-c C-p= always
@@ -26,6 +28,10 @@ title slide.  Nested headings stay on their parent slide.
 - Long slides are paged automatically, one screenful at a time, in the same
   window.  The end of the slide is never cut off; =n=/=p= move through the
   pages and then to the next/previous slide.
+- Org list items can be stepped through one at a time: unrevealed items use
+  the `org-slides-bullet-shadow' face, =SPC= reveals the next item, and
+  =S-SPC= puts the previous item back into shadow.  Nested list items are
+  stepped individually.
 - Experimental split-page mode (=org-slides-page-style= set to =split=)
   narrows to one computed page at a time, shows only that page's content,
   and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window,
@@ -82,8 +88,10 @@ nested heading so the heading starts the next page.
 
 | Key                 | Command                            |
 |---------------------+------------------------------------|
-| =n= / =SPC=         | Next page / next slide             |
-| =p= / =S-SPC=       | Previous page / previous slide     |
+| =SPC=               | Reveal next list item, then next page/slide |
+| =S-SPC=             | Shadow previous list item, then previous page/slide |
+| =n=                 | Next page / next slide             |
+| =p=                 | Previous page / previous slide     |
 | =right=             | Next page / next slide             |
 | =left=              | Previous page / previous slide     |
 | =next=              | Next page / next slide             |
@@ -99,9 +107,11 @@ nested heading so the heading starts the next page.
 | =C-c C-1=           | Toggle the one-page view           |
 | =C-c <= / =C-c >=   | First/last slide                   |
 
-The letter and =SPC= keys only navigate while the buffer is read-only.  Turn
-off =org-slides-read-only-on-start= or use =C-c C-w= to edit, then use the
-arrow keys or =C-c C-n= / =C-c C-p= to navigate.
+The letter, =SPC=, and =S-SPC= keys only navigate while the buffer is
+read-only.  Turn off =org-slides-read-only-on-start= or use =C-c C-w= to
+edit, then use the arrow keys or =C-c C-n= / =C-c C-p= to navigate.
+=n=/=p= and the arrow keys move directly between pages or slides and bypass
+any unrevealed list items; =SPC=/=S-SPC= step through those items first.
 
 * Customization
 
@@ -117,7 +127,16 @@ arrow keys or =C-c C-n= / =C-c C-p= to navigate.
 (setq org-slides-page-style 'scroll)    ; or 'split (experimental)
 (setq org-slides-page-indicator 'always) ; 'split for only multi-page, nil off
 (setq org-slides-page-break-at-headings t)
+(setq org-slides-incremental-bullets t) ; SPC/S-SPC step through list items
 #+end_src
+
+Unrevealed list items use the =org-slides-bullet-shadow= face, which inherits
+=shadow= by default.  Customize that face to change the dimmed text.  Set
+=org-slides-incremental-bullets= to =nil= to reveal all list items at once.
+With split-page mode, items are collected per page; with scroll pagination,
+they are collected for the whole logical slide.  Reveal state is stored per
+slide and page, so once an item has been revealed it stays revealed when you
+navigate away and return with =n=/=p= or =SPC=/=S-SPC=.
 
 =org-slides-page-indicator= accepts =always= (default: every slide,
 including single-page slides and the title slide), =split= (only when a slide
@@ -151,7 +170,7 @@ For example, refresh =org-table-fit= overlays after each slide change:
 
 * Differences from org-present
 
-- Backward navigation is bound by default to =p=, =S-SPC=, and the left arrow.
+- Backward navigation is bound by default to =p= and the left arrow; =S-SPC= steps backward through list-item reveals and then pages.
 - Navigation keys are editable-aware: they insert characters when the buffer
   is writable and navigate when it is read-only.
 - Complete =#+= lines are hidden together with their newlines, removing the
@@ -161,6 +180,8 @@ For example, refresh =org-table-fit= overlays after each slide change:
 - The previous text scale is restored on quit.
 - Tall slides are automatically paged in a single window; org-present just
   narrows to the slide and lets the overflow run off the bottom.
+- List items can be revealed one at a time with =SPC= and re-shadowed with
+  =S-SPC=; nested items step individually.
 - An experimental split-page style narrows to each computed page, shows only
   that page's content, and reports =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES=
   in the mode line.

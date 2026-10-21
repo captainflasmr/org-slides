@@ -23,6 +23,13 @@ Text one.
 Text two.
 ")
 
+(defun org-slides-test--shadow-count ()
+  "Return the number of active list-item shadow overlays."
+  (let ((count 0))
+    (dotimes (i (length org-slides--bullet-overlays) count)
+      (when (overlayp (aref org-slides--bullet-overlays i))
+        (setq count (1+ count))))))
+
 (defun org-slides-test--overlay-covering (position)
   "Return the org-slides invisible overlay covering POSITION, or nil."
   (seq-find (lambda (overlay)
@@ -193,16 +200,126 @@ Text two.
               (should (= org-slides--page-index 0))))
         (org-slides-quit)))))
 
+(ert-deftest org-slides-test-incremental-bullets ()
+  "SPC reveals list items and S-SPC shadows them again."
+  (let ((org-slides-page-style 'split)
+        (org-slides-incremental-bullets t))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* Slide\n\n- One\n- Two\n  - Child\n- Three\n")
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (= (length org-slides--bullet-ranges) 4))
+            (should (= org-slides--bullet-index 0))
+            (should (= (org-slides-test--shadow-count) 4))
+            (org-slides-step-forward)
+            (should (= org-slides--bullet-index 1))
+            (should (= (org-slides-test--shadow-count) 3))
+            (org-slides-step-backward)
+            (should (= org-slides--bullet-index 0))
+            (should (= (org-slides-test--shadow-count) 4))
+            (dotimes (_ 4)
+              (org-slides-step-forward))
+            (should (= org-slides--bullet-index 4))
+            (should (= (org-slides-test--shadow-count) 0)))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-step-advances-after-items ()
+  "SPC advances to the next slide after all items are revealed."
+  (let ((org-slides-page-style 'split)
+        (org-slides-incremental-bullets t))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* One\n\n- A\n\n* Two\n\n- B\n")
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (= org-slides--slide-number 1))
+            (should (= org-slides--bullet-index 0))
+            (org-slides-step-forward)
+            (should (= org-slides--slide-number 1))
+            (should (= org-slides--bullet-index 1))
+            (org-slides-step-forward)
+            (should (= org-slides--slide-number 2))
+            (should (= org-slides--bullet-index 0))
+            (should (= (org-slides-test--shadow-count) 1)))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-bullet-persistence ()
+  "Revealed items stay revealed when navigating away and back."
+  (let ((org-slides-page-style 'split)
+        (org-slides-incremental-bullets t))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* One\n\n- A\n- B\n\n* Two\n\n- C\n")
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            ;; Reveal all items on slide 1.
+            (dotimes (_ 2)
+              (org-slides-step-forward))
+            (should (= org-slides--bullet-index 2))
+            (org-slides-next)
+            (should (= org-slides--slide-number 2))
+            (should (= org-slides--bullet-index 0))
+            (org-slides-prev)
+            (should (= org-slides--slide-number 1))
+            (should (= org-slides--bullet-index 2))
+            (should (= (org-slides-test--shadow-count) 0))
+            ;; Hide one, navigate away and back, partial state persists.
+            (org-slides-step-backward)
+            (should (= org-slides--bullet-index 1))
+            (org-slides-next)
+            (org-slides-prev)
+            (should (= org-slides--slide-number 1))
+            (should (= org-slides--bullet-index 1))
+            (should (= (org-slides-test--shadow-count) 1)))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-bullet-persistence-subpage ()
+  "Reveals persist when moving between sub-pages."
+  (let ((org-slides-page-style 'split)
+        (org-slides-incremental-bullets t))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* Slide\n\n")
+      (dotimes (i 100)
+        (insert (format "- Item %03d with some text.\n" i)))
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (> (length org-slides--split-pages) 1))
+            (let ((count (length org-slides--bullet-ranges)))
+              (should (> count 0))
+              (dotimes (_ count)
+                (org-slides-step-forward))
+              (should (= org-slides--bullet-index count))
+              ;; Reveal all, then step to the next page.
+              (org-slides-step-forward)
+              (should (= org-slides--page-index 1))
+              (should (= org-slides--bullet-index 0))
+              ;; Back to page 0: the fully revealed state returns.
+              (org-slides-prev)
+              (should (= org-slides--page-index 0))
+              (should (= org-slides--bullet-index count))
+              (should (= (org-slides-test--shadow-count) 0))))
+        (org-slides-quit)))))
+
 (ert-deftest org-slides-test-default-keybindings ()
   "The navigation keys are bound by default."
   (should (eq (lookup-key org-slides-mode-map (kbd "n"))
               #'org-slides-next-or-self-insert))
   (should (eq (lookup-key org-slides-mode-map (kbd "SPC"))
-              #'org-slides-next-or-self-insert))
+              #'org-slides-step-forward-or-self-insert))
   (should (eq (lookup-key org-slides-mode-map (kbd "p"))
               #'org-slides-prev-or-self-insert))
   (should (eq (lookup-key org-slides-mode-map (kbd "S-SPC"))
-              #'org-slides-prev-or-self-insert))
+              #'org-slides-step-backward-or-self-insert))
   (should (eq (lookup-key org-slides-mode-map (kbd "q"))
               #'org-slides-quit-or-self-insert)))
 
