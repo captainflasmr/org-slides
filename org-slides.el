@@ -108,9 +108,33 @@ presentation programs."
 
 (defcustom org-slides-auto-page t
   "Whether to page through slides that are taller than the window.
-When non-nil, next/previous navigation first moves by one screenful
-inside the current slide; a single window is always used.  When the
-end of the slide is visible, navigation moves to the next slide."
+When non-nil, next/previous navigation first moves within the current
+slide; when the end of the slide is reached, navigation moves to the
+next slide.  `org-slides-page-style' selects how pages are shown."
+  :type 'boolean
+  :group 'org-slides)
+
+(defcustom org-slides-page-style 'scroll
+  "How to show a slide that is taller than the window.
+`scroll' pages by scrolling the whole slide one screenful at a time.
+`split' narrows to each computed page and shows only that page.  The
+`split' style is experimental; it breaks pages at line boundaries and
+prefers to start a page at a nested heading."
+  :type '(choice (const :tag "Scroll one screenful" scroll)
+                 (const :tag "Split into narrowed pages" split))
+  :group 'org-slides)
+
+(defcustom org-slides-page-indicator t
+  "Whether to show the page number in the header line in split-page mode.
+The indicator is only shown when the current slide has more than one
+page."
+  :type 'boolean
+  :group 'org-slides)
+
+(defcustom org-slides-page-break-at-headings t
+  "Whether split pages prefer to start at a nested heading.
+When non-nil, a page break is moved backward to the last nested
+heading that still leaves the preceding page at least half full."
   :type 'boolean
   :group 'org-slides)
 
@@ -146,7 +170,19 @@ Each function is called with the buffer name and current heading.")
   "Markers at the start of each page shown in the current slide.")
 
 (defvar-local org-slides--page-index 0
-  "Index of the current page in `org-slides--page-starts'.")
+  "Index of the current page in the active pagination style.")
+
+(defvar-local org-slides--split-pages nil
+  "List of (START . END) markers for the current slide's split pages.")
+
+(defvar-local org-slides--logical-start nil
+  "Marker for the start of the current logical slide.")
+
+(defvar-local org-slides--logical-end nil
+  "Marker for the end of the current logical slide.")
+
+(defvar-local org-slides--original-header-line-format nil
+  "Value of `header-line-format' before the presentation began.")
 
 (defvar-local org-slides--original-window-start nil
   "Marker for the window start before the presentation began.")
@@ -189,6 +225,31 @@ Each function is called with the buffer name and current heading.")
     (when (and level (> level 1))
       (outline-up-heading (- level 1) t))))
 
+(defun org-slides--clear-logical-bounds ()
+  "Release the markers for the current logical slide."
+  (dolist (marker (list org-slides--logical-start
+                        org-slides--logical-end))
+    (when (markerp marker)
+      (set-marker marker nil)))
+  (setq org-slides--logical-start nil
+        org-slides--logical-end nil))
+
+(defun org-slides--set-logical-bounds ()
+  "Record the start and end of the current narrowed slide."
+  (org-slides--clear-logical-bounds)
+  (setq org-slides--logical-start (copy-marker (point-min))
+        org-slides--logical-end (copy-marker (point-max))))
+
+(defun org-slides--widen-logical ()
+  "Restore the restriction to the current logical slide."
+  (let ((start (and (markerp org-slides--logical-start)
+                    (marker-position org-slides--logical-start)))
+        (end (and (markerp org-slides--logical-end)
+                  (marker-position org-slides--logical-end))))
+    (if (and start end (<= start end))
+        (narrow-to-region start end)
+      (widen))))
+
 (defun org-slides-narrow ()
   "Show only the current slide."
   (if (org-current-level)
@@ -198,7 +259,8 @@ Each function is called with the buffer name and current heading.")
     ;; Show the title page before the first heading.
     (outline-next-heading)
     (narrow-to-region (point-min) (point))
-    (goto-char (point-min))))
+    (goto-char (point-min)))
+  (org-slides--set-logical-bounds))
 
 (defun org-slides--narrow-or-widen ()
   "Narrow to the current slide unless the one-big-page view is active."
@@ -309,10 +371,217 @@ Return non-nil when a new page was shown."
         (goto-char start))
       t)))
 
+(defun org-slides--line-fits-p (window start end body)
+  "Return non-nil when START..END fits in WINDOW's BODY pixel height."
+  (let ((window (or window (selected-window))))
+    (if (and body (display-graphic-p (window-frame window)))
+        (let ((height (ignore-errors
+                        (cdr (window-text-pixel-size
+                              window start end nil nil nil)))))
+          (if (numberp height)
+              (<= height body)
+            (<= (count-lines start end) (window-body-height window))))
+      (<= (count-lines start end) (window-body-height window)))))
+
+(defun org-slides--prefer-heading-break (start end)
+  "Return a nested heading position before END, or END.
+A heading is only used when the preceding page remains at least half
+full.  START is the beginning of the page."
+  (if (not org-slides-page-break-at-headings)
+      end
+    (let ((min-fill (max 1 (/ (count-lines start end) 2)))
+          (break end)
+          (continue t))
+      (save-excursion
+        (goto-char end)
+        (while (and continue (> (point) start))
+          (forward-line -1)
+          (when (and (> (point) start)
+                     (org-at-heading-p)
+                     (>= (count-lines start (point)) min-fill))
+            (setq break (point)
+                  continue nil))))
+      break)))
+
+(defun org-slides--split-page-end (start limit window body)
+  "Return the end of the split page beginning at START.
+LIMIT is the end of the logical slide.  WINDOW and BODY are used to
+measure the rendered height."
+  (save-excursion
+    (goto-char start)
+    (let ((last start)
+          (continue t))
+      (while (and continue (< (point) limit))
+        (forward-line 1)
+        (let ((candidate (min (point) limit)))
+          (if (org-slides--line-fits-p window start candidate body)
+              (setq last candidate)
+            (setq continue nil))))
+      (if (= last start)
+          ;; A single line taller than the window still gets its own page.
+          (save-excursion
+            (goto-char start)
+            (forward-line 1)
+            (min (point) limit))
+        (org-slides--prefer-heading-break start last)))))
+
+(defun org-slides--trim-page-start (start end)
+  "Move START forward over blank lines before END.
+Indentation on a non-blank line is preserved."
+  (save-excursion
+    (goto-char start)
+    (while (and (< (point) end)
+                (looking-at "^[ \t]*$"))
+      (forward-line 1))
+    (point)))
+
+(defun org-slides--compute-split-pages ()
+  "Compute the split-page ranges for the current logical slide."
+  (let* ((window (org-slides--presentation-window))
+         (body (and window
+                    (display-graphic-p (window-frame window))
+                    (window-body-height window t)))
+         (start (point-min))
+         (limit (point-max))
+         pages)
+    (while (< start limit)
+      (let* ((end (org-slides--split-page-end start limit window body))
+             (end (max end (min limit (1+ start))))
+             (page-start (org-slides--trim-page-start start end)))
+        (when (< page-start end)
+          (push (cons (copy-marker page-start) (copy-marker end)) pages))
+        (setq start end)))
+    (or (nreverse pages)
+        (list (cons (copy-marker (point-min))
+                    (copy-marker (point-max)))))))
+
+(defun org-slides--release-pages (pages)
+  "Release the markers in PAGES."
+  (dolist (page pages)
+    (when (markerp (car page))
+      (set-marker (car page) nil))
+    (when (markerp (cdr page))
+      (set-marker (cdr page) nil))))
+
+(defun org-slides--clear-split-pages ()
+  "Release the markers for the current slide's split pages."
+  (org-slides--release-pages org-slides--split-pages)
+  (setq org-slides--split-pages nil))
+
+(defun org-slides--restore-page-indicator ()
+  "Restore the header line saved at presentation start."
+  (setq-local header-line-format org-slides--original-header-line-format))
+
+(defun org-slides--update-page-indicator ()
+  "Show the current page number in the header line."
+  (if (and org-slides-page-indicator
+           (> (length org-slides--split-pages) 1))
+      (setq-local header-line-format
+                  (format " Page %d/%d "
+                          (1+ org-slides--page-index)
+                          (length org-slides--split-pages)))
+    (org-slides--restore-page-indicator)))
+
+(defun org-slides--clear-pagination ()
+  "Clear both scroll-page and split-page state."
+  (org-slides--clear-page-markers)
+  (org-slides--clear-split-pages)
+  (setq org-slides--page-index 0)
+  (org-slides--restore-page-indicator))
+
+(defun org-slides--show-split-page (index)
+  "Show split page INDEX, narrowed to that page only."
+  (let ((page (nth index org-slides--split-pages)))
+    (when page
+      (let ((start (and (markerp (car page))
+                        (marker-position (car page))))
+            (end (and (markerp (cdr page))
+                      (marker-position (cdr page)))))
+        (when (and start end (<= start end))
+          (org-slides--widen-logical)
+          (narrow-to-region start end)
+          (goto-char start)
+          (setq org-slides--page-index index)
+          (when-let* ((window (org-slides--presentation-window)))
+            (set-window-start window start))
+          (org-slides--update-page-indicator)
+          t)))))
+
+(defun org-slides--setup-split-pages (&optional index)
+  "Compute split pages for the current slide and show page INDEX.
+The indicator header line is only added when the slide needs more
+than one page, so it does not force a slide that already fits to
+split."
+  (org-slides--clear-split-pages)
+  (org-slides--restore-page-indicator)
+  (org-slides--widen-logical)
+  (let ((pages (org-slides--compute-split-pages)))
+    (when (and org-slides-page-indicator
+               (> (length pages) 1))
+      (org-slides--release-pages pages)
+      (setq-local header-line-format " Page ?/?")
+      (org-slides--widen-logical)
+      (setq pages (org-slides--compute-split-pages)))
+    (setq org-slides--split-pages pages)
+    (let* ((count (length pages))
+           (index (max 0 (min (or index 0) (1- count)))))
+      (if (zerop count)
+          (progn
+            (setq org-slides--page-index 0)
+            (org-slides--restore-page-indicator))
+        (org-slides--show-split-page index)))))
+
+(defun org-slides--next-split-page ()
+  "Show the next split page, returning non-nil on success."
+  (when (and org-slides-auto-page
+             (eq org-slides-page-style 'split)
+             (not org-slides--one-big-page)
+             (< (1+ org-slides--page-index)
+                (length org-slides--split-pages)))
+    (org-slides--show-split-page (1+ org-slides--page-index))))
+
+(defun org-slides--prev-split-page ()
+  "Show the previous split page, returning non-nil on success."
+  (when (and org-slides-auto-page
+             (eq org-slides-page-style 'split)
+             (not org-slides--one-big-page)
+             (> org-slides--page-index 0))
+    (org-slides--show-split-page (1- org-slides--page-index))))
+
+(defun org-slides--refresh-split-pages (&optional _frame)
+  "Recompute split pages after the window size or a face change."
+  (when (and org-slides-mode
+             org-slides-auto-page
+             (eq org-slides-page-style 'split)
+             (not org-slides--one-big-page)
+             org-slides--started
+             (org-slides--presentation-window)
+             (markerp org-slides--logical-start)
+             (marker-position org-slides--logical-start))
+    (org-slides--setup-split-pages org-slides--page-index)))
+
+(defun org-slides--refresh-all-split-pages (&optional frame)
+  "Refresh split pages in all presentation buffers on FRAME changes."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (org-slides--refresh-split-pages frame))))
+
+(defun org-slides--enter-slide ()
+  "Run navigation hooks and show the first page of the current slide."
+  (org-slides--clear-pagination)
+  (org-slides-run-after-navigate-functions)
+  (when (and org-slides-auto-page
+             (not org-slides--one-big-page))
+    (if (eq org-slides-page-style 'split)
+        (org-slides--setup-split-pages 0)
+      (org-slides--reset-pages))))
+
 (defun org-slides-next ()
   "Move to the next page, or the next top-level heading."
   (interactive)
-  (unless (org-slides--next-page)
+  (unless (if (eq org-slides-page-style 'split)
+              (org-slides--next-split-page)
+            (org-slides--next-page))
     (widen)
     (if (org-current-level)
         (progn
@@ -321,14 +590,14 @@ Return non-nil when a new page was shown."
               (org-slides-top)))
       (outline-next-heading))
     (org-slides--narrow-or-widen)
-    (unless org-slides--one-big-page
-      (org-slides--reset-pages))
-    (org-slides-run-after-navigate-functions)))
+    (org-slides--enter-slide)))
 
 (defun org-slides-prev ()
   "Move to the previous page, or the previous top-level heading."
   (interactive)
-  (unless (org-slides--prev-page)
+  (unless (if (eq org-slides-page-style 'split)
+              (org-slides--prev-split-page)
+            (org-slides--prev-page))
     (widen)
     (if (org-current-level)
         (progn
@@ -337,9 +606,7 @@ Return non-nil when a new page was shown."
             (goto-char (point-min))))
       (goto-char (point-min)))
     (org-slides--narrow-or-widen)
-    (unless org-slides--one-big-page
-      (org-slides--reset-pages))
-    (org-slides-run-after-navigate-functions)))
+    (org-slides--enter-slide)))
 
 (defun org-slides-beginning ()
   "Move to the first slide (the title slide, if there is one)."
@@ -347,9 +614,7 @@ Return non-nil when a new page was shown."
   (widen)
   (goto-char (point-min))
   (org-slides--narrow-or-widen)
-  (unless org-slides--one-big-page
-    (org-slides--reset-pages))
-  (org-slides-run-after-navigate-functions))
+  (org-slides--enter-slide))
 
 (defun org-slides-end ()
   "Move to the last slide."
@@ -358,9 +623,7 @@ Return non-nil when a new page was shown."
   (goto-char (point-max))
   (org-slides-top)
   (org-slides--narrow-or-widen)
-  (unless org-slides--one-big-page
-    (org-slides--reset-pages))
-  (org-slides-run-after-navigate-functions))
+  (org-slides--enter-slide))
 
 (defun org-slides-toggle-one-big-page ()
   "Toggle between one slide at a time and the whole buffer."
@@ -369,10 +632,10 @@ Return non-nil when a new page was shown."
   (if org-slides--one-big-page
       (progn
         (widen)
-        (org-slides--clear-page-markers))
+        (org-slides--clear-pagination)
+        (org-slides--clear-logical-bounds))
     (org-slides-narrow)
-    (org-slides--reset-pages))
-  (org-slides-run-after-navigate-functions)
+    (org-slides--enter-slide))
   (message "Org Slides: %s"
            (if org-slides--one-big-page
                "showing all slides"
@@ -518,7 +781,9 @@ example block visible."
   (unless org-slides--started
     (setq org-slides--started t
           org-slides--one-big-page nil)
-    (org-slides--clear-page-markers)
+    (setq org-slides--original-header-line-format header-line-format)
+    (org-slides--clear-pagination)
+    (org-slides--clear-logical-bounds)
     (when-let* ((window (org-slides--presentation-window)))
       (setq org-slides--original-window-start
             (copy-marker (window-start window))))
@@ -534,7 +799,10 @@ example block visible."
       (org-slides--display-inline-images)
       (setq org-slides--images-displayed t))
     (org-slides-narrow)
-    (org-slides--reset-pages)
+    (add-hook 'text-scale-mode-hook
+              #'org-slides--refresh-split-pages nil t)
+    (add-hook 'buffer-face-mode-hook
+              #'org-slides--refresh-split-pages nil t)
     (when org-slides-read-only-on-start
       (org-slides-read-only))
     (when org-slides-hide-cursor-on-start
@@ -553,7 +821,12 @@ example block visible."
     (setq buffer-read-only org-slides--previous-read-only)
     (setq org-slides--cursor-cache nil
           org-slides--one-big-page nil)
-    (org-slides--clear-page-markers)
+    (remove-hook 'text-scale-mode-hook
+                 #'org-slides--refresh-split-pages t)
+    (remove-hook 'buffer-face-mode-hook
+                 #'org-slides--refresh-split-pages t)
+    (org-slides--clear-pagination)
+    (org-slides--clear-logical-bounds)
     (widen)
     (when (markerp org-slides--original-window-start)
       (let ((window (org-slides--presentation-window))
@@ -561,7 +834,8 @@ example block visible."
         (when (and window start)
           (set-window-start window start)))
       (set-marker org-slides--original-window-start nil))
-    (setq org-slides--original-window-start nil)))
+    (setq org-slides--original-window-start nil
+          org-slides--original-header-line-format nil)))
 
 ;;;###autoload
 (define-minor-mode org-slides-mode
@@ -581,7 +855,7 @@ Each top-level heading is one slide.  Use `org-slides-start' to begin."
   (interactive)
   (org-slides-mode 1)
   (when org-slides-mode
-    (org-slides-run-after-navigate-functions)))
+    (org-slides--enter-slide)))
 
 ;;;###autoload
 (defun org-slides-quit ()
@@ -630,6 +904,9 @@ See `org-slides-next-or-self-insert' for ARG."
   (if buffer-read-only
       (org-slides-end)
     (self-insert-command (or arg 1))))
+
+(add-hook 'window-size-change-functions
+          #'org-slides--refresh-all-split-pages)
 
 (provide 'org-slides)
 ;;; org-slides.el ends here

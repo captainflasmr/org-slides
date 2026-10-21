@@ -26,6 +26,11 @@ title slide.  Nested headings stay on their parent slide.
 - Long slides are paged automatically, one screenful at a time, in the same
   window.  The end of the slide is never cut off; =n=/=p= move through the
   pages and then to the next/previous slide.
+- Experimental split-page mode (=org-slides-page-style= set to =split=)
+  narrows to one computed page at a time, shows only that page's content,
+  and displays =Page X/Y= in the header line.  Page breaks fit the window,
+  prefer to start at a nested heading, and can be recomputed after a resize
+  or text-scale change.
 - The text scale in use before the presentation is restored on quit.
 - Overlay and cursor state is buffer-local, so multiple presentations do not
   clobber each other.
@@ -57,6 +62,17 @@ enlarged.  If a slide is taller than the window, =n= first scrolls through it
 one screenful at a time; another =n= at the end moves to the next slide.
 =p= walks back through those pages.  Use the navigation keys below.  =q= or
 =C-c C-q= quits.
+
+For the experimental page-narrowing style, set:
+
+#+begin_src emacs-lisp
+(setq org-slides-page-style 'split)
+#+end_src
+
+Each tall slide is then split into pages that fit the window.  Only the
+current page's content is displayed, and =Page X/Y= appears in the header line.
+Pages break at line boundaries; when possible, a break is moved back to a
+nested heading so the heading starts the next page.
 
 * Default keys
 
@@ -94,6 +110,9 @@ arrow keys or =C-c C-n= / =C-c C-p= to navigate.
 (setq org-slides-hide-stars-in-headings t)
 (setq org-slides-startup-folded nil)    ; fold each slide on navigation
 (setq org-slides-auto-page t)           ; page tall slides in one window
+(setq org-slides-page-style 'scroll)    ; or 'split (experimental)
+(setq org-slides-page-indicator t)      ; header-line "Page X/Y"
+(setq org-slides-page-break-at-headings t)
 #+end_src
 
 * Hooks
@@ -125,6 +144,8 @@ For example, refresh =org-table-fit= overlays after each slide change:
 - The previous text scale is restored on quit.
 - Tall slides are automatically paged in a single window; org-present just
   narrows to the slide and lets the overflow run off the bottom.
+- An experimental split-page style narrows to each computed page, shows only
+  that page's content, and reports =Page X/Y= in the header line.
 - The one-page view is respected by next/previous navigation.
 - Modern Org calls are used (=org-get-previous-sibling=,
   =outline-show-all=).

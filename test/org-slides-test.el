@@ -47,6 +47,31 @@ Text two.
     (should-not org-slides--page-starts)
     (should (= org-slides--page-index 0))))
 
+(ert-deftest org-slides-test-split-pages ()
+  "Split-page mode narrows to individual pages and updates the indicator."
+  (let ((org-slides-page-style 'split))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* Long Slide\n\n")
+      (dotimes (i 200)
+        (insert (format "Line %03d: some text for the page splitter.\n" i)))
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (> (length org-slides--split-pages) 1))
+            (should (buffer-narrowed-p))
+            (should (= org-slides--page-index 0))
+            (should (string-match-p "Page 1/"
+                                    (format "%S" header-line-format)))
+            (org-slides-next)
+            (should (= org-slides--page-index 1))
+            (should (string-match-p "Page 2/"
+                                    (format "%S" header-line-format)))
+            (org-slides-prev)
+            (should (= org-slides--page-index 0)))
+        (org-slides-quit)))))
+
 (ert-deftest org-slides-test-default-keybindings ()
   "The navigation keys are bound by default."
   (should (eq (lookup-key org-slides-mode-map (kbd "n"))

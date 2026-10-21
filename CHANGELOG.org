@@ -14,6 +14,13 @@
   straight from slide to slide even when a slide overflows the window.
 - Page positions are tracked with markers, so editing does not invalidate the
   page history.
+- Experimental split-page mode via =org-slides-page-style= =split=: each page
+  is a separate narrowed region containing only that page's content.  Page
+  ranges are computed from the rendered window height, prefer starting at a
+  nested heading, and are recomputed after window-size and text-scale
+  changes.  =org-slides-page-indicator= shows =Page X/Y= in the header line.
+  =org-slides-page-break-at-headings= controls the heading preference.
+- The original =header-line-format= and window start are restored on quit.
 
 * Version 0.1.0
 
