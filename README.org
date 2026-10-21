@@ -1,0 +1,130 @@
+#+title: org-slides
+#+author: James Dyer
+#+language: en
+#+options: toc:nil num:nil
+
+Minimalist presentation mode for Org buffers, derived from
+[[https://github.com/rlister/org-present][org-present]].
+
+Each top-level heading is one slide; the text before the first heading is the
+title slide.  Nested headings stay on their parent slide.
+
+* Features
+
+- Default forward/backward keys: =n= / =SPC= / right arrow forward,
+  =p= / =S-SPC= / left arrow backward.
+- =q= quits, =g= and =G= jump to the first and last slide.
+- In read-write mode the letter, space, and quit keys insert their characters
+  instead, so the buffer remains editable.  =C-c C-n= and =C-c C-p= always
+  navigate.
+- Hides leading heading stars, complete =#+= keyword lines, and emphasis
+  markers.  Hiding a complete =#+= line also hides its newline, so
+  =#+begin_src= / =#+end_src= delimiters do not leave blank lines around
+  source blocks.
+- Literal =#+= lines inside source, example, export, comment, quote, verse,
+  center, special, and dynamic blocks are left visible.
+- The text scale in use before the presentation is restored on quit.
+- Overlay and cursor state is buffer-local, so multiple presentations do not
+  clobber each other.
+- Optional one-page view with =C-c C-1=.
+
+* Installation
+
+Requires Emacs 27.1+ and Org 9.4+.  The package is a single file.  Add its
+directory to =load-path= or use =use-package=:
+
+#+begin_src emacs-lisp
+(use-package org-slides
+  :load-path "~/.emacs.d/local-packages/org-slides"
+  :commands org-slides-start
+  :bind (:map org-mode-map
+              ("C-c s p" . org-slides-start)))
+#+end_src
+
+In the offline toolkit the package lives under
+=local-packages/org-slides= and is loaded automatically by the rendered
+=init.el= when present.
+
+* Usage
+
+Open an Org file and run =M-x org-slides-start= (or =C-c s p= if you added the
+binding above).  The current slide is narrowed to the window and the text is
+enlarged.  Use the navigation keys below.  =q= or =C-c C-q= quits.
+
+* Default keys
+
+| Key         | Command                          |
+|-------------+----------------------------------|
+| =n= / =SPC= | Next slide                       |
+| =p= / =S-SPC= | Previous slide                 |
+| =right=     | Next slide                       |
+| =left=      | Previous slide                   |
+| =next=      | Next slide                       |
+| =prior=     | Previous slide                   |
+| =g=         | First slide                      |
+| =G=         | Last slide                       |
+| =q=         | Quit                             |
+| =C-c C-n=   | Next slide (works while editing) |
+| =C-c C-p=   | Previous slide                   |
+| =C-c C-q=   | Quit                             |
+| =C-c C-= / C-c C--= | Increase/decrease text size |
+| =C-c C-r / C-c C-w= | Read-only / read-write      |
+| =C-c C-1=   | Toggle the one-page view         |
+| =C-c <= / =C-c >= | First/last slide            |
+
+The letter and =SPC= keys only navigate while the buffer is read-only.  Turn
+off =org-slides-read-only-on-start= or use =C-c C-w= to edit, then use the
+arrow keys or =C-c C-n= / =C-c C-p= to navigate.
+
+* Customization
+
+#+begin_src emacs-lisp
+(setq org-slides-text-scale 5)          ; starting scale
+(setq org-slides-scale-on-start t)      ; enlarge on start
+(setq org-slides-display-inline-images t)
+(setq org-slides-read-only-on-start t)
+(setq org-slides-hide-cursor-on-start t)
+(setq org-slides-hide-stars-in-headings t)
+(setq org-slides-startup-folded nil)    ; fold each slide on navigation
+#+end_src
+
+* Hooks
+
+- =org-slides-mode-hook= runs when the minor mode is enabled or disabled.
+- =org-slides-after-navigate-functions= is an abnormal hook called with the
+  buffer name and current heading after the presentation starts or changes
+  slides.
+
+For example, refresh =org-table-fit= overlays after each slide change:
+
+#+begin_src emacs-lisp
+(add-hook 'org-slides-after-navigate-functions
+          (lambda (&rest _)
+            (when (and (bound-and-true-p org-table-fit-overlay-mode)
+                       (fboundp 'org-table-fit-refresh-overlays))
+              (org-table-fit-refresh-overlays))))
+#+end_src
+
+* Differences from org-present
+
+- Backward navigation is bound by default to =p=, =S-SPC=, and the left arrow.
+- Navigation keys are editable-aware: they insert characters when the buffer
+  is writable and navigate when it is read-only.
+- Complete =#+= lines are hidden together with their newlines, removing the
+  blank lines upstream leaves around source-block delimiters.
+- Literal =#+= lines inside block contents are not hidden.
+- Overlay lists and cursor caches are buffer-local.
+- The previous text scale is restored on quit.
+- The one-page view is respected by next/previous navigation.
+- Modern Org calls are used (=org-get-previous-sibling=,
+  =outline-show-all=).
+- Setup and teardown are handled by the minor mode itself, so no mode hooks
+  are required just to display images, hide the cursor, or make the buffer
+  read-only.
+
+* License and attribution
+
+GPL-3.0-or-later.  This package is derived from =org-present.el= by Ric
+Lister (https://github.com/rlister/org-present), which is itself based on the
+original org-present work.  The original copyright and license notices are
+retained in =org-slides.el= and the full license text is in =LICENSE=.
