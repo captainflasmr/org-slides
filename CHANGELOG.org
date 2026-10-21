@@ -18,9 +18,11 @@
   is a separate narrowed region containing only that page's content.  Page
   ranges are computed from the rendered window height, prefer starting at a
   nested heading, and are recomputed after window-size and text-scale
-  changes.  =org-slides-page-indicator= shows =Page X/Y= in the header line.
+  changes.  =org-slides-page-indicator= shows =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= in the mode line on every slide by default, including single-page slides; the title page is slide 0 and top-level headings are numbered in document order.
   =org-slides-page-break-at-headings= controls the heading preference.
-- The original =header-line-format= and window start are restored on quit.
+- The original =mode-line-process= and window start are restored on quit.
+- New =org-slides-page-indicator-format= controls the mode-line SLIDE.PAGE/totals format.
+- Next navigation at the end of the last slide now stays on the final page instead of resetting that slide to page 0 and appearing to bounce between the last pages.
 
 * Version 0.1.0
 

@@ -61,6 +61,7 @@
 ;;; Code:
 
 (require 'org)
+(require 'org-element)
 (require 'subr-x)
 
 (defgroup org-slides nil
@@ -124,11 +125,27 @@ prefers to start a page at a nested heading."
                  (const :tag "Split into narrowed pages" split))
   :group 'org-slides)
 
-(defcustom org-slides-page-indicator t
-  "Whether to show the page number in the header line in split-page mode.
-The indicator is only shown when the current slide has more than one
-page."
-  :type 'boolean
+(defcustom org-slides-page-indicator 'always
+  "When to show the SLIDE.PAGE indicator in the header line.
+The title page before the first heading is slide 0; top-level
+headings are numbered 1, 2, 3, ... in document order.
+
+`always' shows the indicator on every slide, including single-page
+slides.  `split' shows it only when the current slide has more than
+one page.  nil disables it.  For compatibility, any other non-nil
+value is treated as `always'."
+  :type '(choice (const :tag "Always" always)
+                 (const :tag "Only split slides" split)
+                 (const :tag "Never" nil))
+  :group 'org-slides)
+
+(defcustom org-slides-page-indicator-format "%d.%d / %d.%d"
+  "Format for the mode-line slide/page indicator.
+Four integers are substituted: current slide, current page, total
+slides (top-level headings), and total pages in the current slide.
+For example, the default `%d.%d / %d.%d' renders slide 2, page 3, with
+5 slides and 4 pages as `2.3 / 5.4'."
+  :type 'string
   :group 'org-slides)
 
 (defcustom org-slides-page-break-at-headings t
@@ -172,6 +189,12 @@ Each function is called with the buffer name and current heading.")
 (defvar-local org-slides--page-index 0
   "Index of the current page in the active pagination style.")
 
+(defvar-local org-slides--slide-number 0
+  "Ordinal of the current top-level heading, or 0 for the title page.")
+
+(defvar-local org-slides--slide-numbers nil
+  "Alist of (BEGIN-MARKER . NUMBER) for every top-level heading.")
+
 (defvar-local org-slides--split-pages nil
   "List of (START . END) markers for the current slide's split pages.")
 
@@ -181,8 +204,8 @@ Each function is called with the buffer name and current heading.")
 (defvar-local org-slides--logical-end nil
   "Marker for the end of the current logical slide.")
 
-(defvar-local org-slides--original-header-line-format nil
-  "Value of `header-line-format' before the presentation began.")
+(defvar-local org-slides--original-mode-line-process nil
+  "Value of `mode-line-process' before the presentation began.")
 
 (defvar-local org-slides--original-window-start nil
   "Marker for the window start before the presentation began.")
@@ -469,17 +492,29 @@ Indentation on a non-blank line is preserved."
   (setq org-slides--split-pages nil))
 
 (defun org-slides--restore-page-indicator ()
-  "Restore the header line saved at presentation start."
-  (setq-local header-line-format org-slides--original-header-line-format))
+  "Restore the mode-line process string saved at presentation start."
+  (setq-local mode-line-process org-slides--original-mode-line-process))
+
+(defun org-slides--indicator-wanted-p (page-count)
+  "Return non-nil when the slide.page indicator should be shown.
+PAGE-COUNT is the number of pages in the current slide."
+  (cond
+   ((eq org-slides-page-indicator 'split) (> page-count 1))
+   (org-slides-page-indicator t)
+   (t nil)))
 
 (defun org-slides--update-page-indicator ()
-  "Show the current page number in the header line."
-  (if (and org-slides-page-indicator
-           (> (length org-slides--split-pages) 1))
-      (setq-local header-line-format
-                  (format " Page %d/%d "
-                          (1+ org-slides--page-index)
-                          (length org-slides--split-pages)))
+  "Show SLIDE.PAGE and the slide/page totals in the mode line."
+  (if (and (org-slides--indicator-wanted-p
+            (length org-slides--split-pages))
+           (integerp org-slides--slide-number))
+      (setq-local mode-line-process
+                  (format " %s "
+                          (format org-slides-page-indicator-format
+                                  org-slides--slide-number
+                                  (1+ org-slides--page-index)
+                                  (length org-slides--slide-numbers)
+                                  (length org-slides--split-pages))))
     (org-slides--restore-page-indicator)))
 
 (defun org-slides--clear-pagination ()
@@ -509,27 +544,18 @@ Indentation on a non-blank line is preserved."
 
 (defun org-slides--setup-split-pages (&optional index)
   "Compute split pages for the current slide and show page INDEX.
-The indicator header line is only added when the slide needs more
-than one page, so it does not force a slide that already fits to
-split."
+The mode-line indicator does not affect the text height."
   (org-slides--clear-split-pages)
   (org-slides--restore-page-indicator)
   (org-slides--widen-logical)
-  (let ((pages (org-slides--compute-split-pages)))
-    (when (and org-slides-page-indicator
-               (> (length pages) 1))
-      (org-slides--release-pages pages)
-      (setq-local header-line-format " Page ?/?")
-      (org-slides--widen-logical)
-      (setq pages (org-slides--compute-split-pages)))
-    (setq org-slides--split-pages pages)
-    (let* ((count (length pages))
-           (index (max 0 (min (or index 0) (1- count)))))
-      (if (zerop count)
-          (progn
-            (setq org-slides--page-index 0)
-            (org-slides--restore-page-indicator))
-        (org-slides--show-split-page index)))))
+  (setq org-slides--split-pages (org-slides--compute-split-pages))
+  (let* ((count (length org-slides--split-pages))
+         (index (max 0 (min (or index 0) (1- count)))))
+    (if (zerop count)
+        (progn
+          (setq org-slides--page-index 0)
+          (org-slides--restore-page-indicator))
+      (org-slides--show-split-page index))))
 
 (defun org-slides--next-split-page ()
   "Show the next split page, returning non-nil on success."
@@ -566,9 +592,52 @@ split."
     (with-current-buffer buffer
       (org-slides--refresh-split-pages frame))))
 
+(defun org-slides--clear-slide-numbers ()
+  "Release the cached top-level heading positions."
+  (dolist (entry org-slides--slide-numbers)
+    (when (markerp (car entry))
+      (set-marker (car entry) nil)))
+  (setq org-slides--slide-numbers nil))
+
+(defun org-slides--build-slide-numbers ()
+  "Build (BEGIN-MARKER . NUMBER) for every top-level heading."
+  (let ((numbers nil)
+        (number 0))
+    (save-restriction
+      (widen)
+      (org-element-map (org-element-parse-buffer) 'headline
+        (lambda (headline)
+          (when (= (org-element-property :level headline) 1)
+            (setq number (1+ number))
+            (push (cons (copy-marker (org-element-property :begin headline))
+                        number)
+                  numbers))
+          nil)))
+    (nreverse numbers)))
+
+(defun org-slides--compute-slide-number ()
+  "Return the ordinal of the current top-level heading.
+The title page before the first heading is slide 0."
+  (unless org-slides--slide-numbers
+    (setq org-slides--slide-numbers (org-slides--build-slide-numbers)))
+  (let ((target (or (and (markerp org-slides--logical-start)
+                         (marker-position org-slides--logical-start))
+                    (point-min)))
+        (number 0))
+    (catch 'done
+      (dolist (entry org-slides--slide-numbers number)
+        (let ((position (marker-position (car entry))))
+          (if (and position (<= position target))
+              (setq number (cdr entry))
+            (throw 'done number)))))))
+
 (defun org-slides--enter-slide ()
   "Run navigation hooks and show the first page of the current slide."
   (org-slides--clear-pagination)
+  (when (and (eq org-slides-page-style 'split)
+             org-slides-page-indicator
+             (not org-slides--one-big-page))
+    (setq org-slides--slide-number (org-slides--compute-slide-number)))
   (org-slides-run-after-navigate-functions)
   (when (and org-slides-auto-page
              (not org-slides--one-big-page))
@@ -577,20 +646,29 @@ split."
       (org-slides--reset-pages))))
 
 (defun org-slides-next ()
-  "Move to the next page, or the next top-level heading."
+  "Move to the next page, or the next top-level heading.
+At the end of the last slide this does nothing, so the final page is
+not replaced by the first page of the same slide."
   (interactive)
   (unless (if (eq org-slides-page-style 'split)
               (org-slides--next-split-page)
             (org-slides--next-page))
-    (widen)
-    (if (org-current-level)
-        (progn
-          (org-slides-top)
-          (or (org-get-next-sibling)
-              (org-slides-top)))
-      (outline-next-heading))
-    (org-slides--narrow-or-widen)
-    (org-slides--enter-slide)))
+    (let ((next-slide
+           (save-excursion
+             (save-restriction
+               (widen)
+               (if (org-current-level)
+                   (progn
+                     (org-slides-top)
+                     (org-get-next-sibling))
+                 (outline-next-heading))))))
+      (if next-slide
+          (progn
+            (widen)
+            (goto-char next-slide)
+            (org-slides--narrow-or-widen)
+            (org-slides--enter-slide))
+        (message "Org Slides: end of presentation")))))
 
 (defun org-slides-prev ()
   "Move to the previous page, or the previous top-level heading."
@@ -780,8 +858,10 @@ example block visible."
     (user-error "Org Slides requires Org mode"))
   (unless org-slides--started
     (setq org-slides--started t
-          org-slides--one-big-page nil)
-    (setq org-slides--original-header-line-format header-line-format)
+          org-slides--one-big-page nil
+          org-slides--slide-number 0)
+    (org-slides--clear-slide-numbers)
+    (setq org-slides--original-mode-line-process mode-line-process)
     (org-slides--clear-pagination)
     (org-slides--clear-logical-bounds)
     (when-let* ((window (org-slides--presentation-window)))
@@ -820,13 +900,15 @@ example block visible."
     (org-slides--rm-overlays)
     (setq buffer-read-only org-slides--previous-read-only)
     (setq org-slides--cursor-cache nil
-          org-slides--one-big-page nil)
+          org-slides--one-big-page nil
+          org-slides--slide-number 0)
     (remove-hook 'text-scale-mode-hook
                  #'org-slides--refresh-split-pages t)
     (remove-hook 'buffer-face-mode-hook
                  #'org-slides--refresh-split-pages t)
     (org-slides--clear-pagination)
     (org-slides--clear-logical-bounds)
+    (org-slides--clear-slide-numbers)
     (widen)
     (when (markerp org-slides--original-window-start)
       (let ((window (org-slides--presentation-window))
@@ -835,7 +917,7 @@ example block visible."
           (set-window-start window start)))
       (set-marker org-slides--original-window-start nil))
     (setq org-slides--original-window-start nil
-          org-slides--original-header-line-format nil)))
+          org-slides--original-mode-line-process nil)))
 
 ;;;###autoload
 (define-minor-mode org-slides-mode

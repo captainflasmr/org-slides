@@ -32,8 +32,9 @@ Text two.
             (overlays-in (point-min) (point-max))))
 
 (ert-deftest org-slides-test-auto-page-default ()
-  "Automatic pagination is enabled by default."
-  (should org-slides-auto-page))
+  "Automatic pagination and the slide.page indicator are on by default."
+  (should org-slides-auto-page)
+  (should (eq org-slides-page-indicator 'always)))
 
 (ert-deftest org-slides-test-page-markers ()
   "Page state is reset and cleared cleanly."
@@ -62,14 +63,94 @@ Text two.
             (should (> (length org-slides--split-pages) 1))
             (should (buffer-narrowed-p))
             (should (= org-slides--page-index 0))
-            (should (string-match-p "Page 1/"
-                                    (format "%S" header-line-format)))
+            (should (string-match-p "1\\.1"
+                                    (format "%S" mode-line-process)))
             (org-slides-next)
             (should (= org-slides--page-index 1))
-            (should (string-match-p "Page 2/"
-                                    (format "%S" header-line-format)))
+            (should (string-match-p "1\\.2"
+                                    (format "%S" mode-line-process)))
             (org-slides-prev)
             (should (= org-slides--page-index 0)))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-single-page-indicator ()
+  "The slide number is shown even when a slide has only one page."
+  (let ((org-slides-page-style 'split))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* One\n\nShort one.\n\n* Two\n\nShort two.\n")
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (= org-slides--slide-number 1))
+            (should (string-match-p "1\\.1 / 2\\.1"
+                                    (format "%S" mode-line-process)))
+            (org-slides-next)
+            (should (= org-slides--slide-number 2))
+            (should (string-match-p "2\\.1 / 2\\.1"
+                                    (format "%S" mode-line-process))))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-slide-page-number ()
+  "The indicator uses <slide>.<page>, with the title slide as 0."
+  (let ((org-slides-page-style 'split)
+        (org-slides-page-indicator 'always))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+TITLE: Title\n\n* First Slide\n\n")
+      (dotimes (i 200)
+        (insert (format "Line %03d: text for the page splitter.\n" i)))
+      (insert "\n* Second Slide\n\nShort.\n")
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (= org-slides--slide-number 0))
+            (should (string-match-p "0\\.1 / 2\\.1"
+                                    (format "%S" mode-line-process)))
+            (org-slides-next)
+            (should (= org-slides--slide-number 1))
+            (should (string-match-p
+                     (format "1\\.1 / 2\\.%d"
+                             (length org-slides--split-pages))
+                     (format "%S" mode-line-process)))
+            (org-slides-next)
+            (should (string-match-p
+                     (format "1\\.2 / 2\\.%d"
+                             (length org-slides--split-pages))
+                     (format "%S" mode-line-process)))
+            (dotimes (_ 50)
+              (unless (= org-slides--slide-number 2)
+                (org-slides-next)))
+            (should (= org-slides--slide-number 2))
+            (should (string-match-p "2\\.1 / 2\\.1"
+                                    (format "%S" mode-line-process))))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-end-of-presentation ()
+  "N on the last page of the last slide stays there."
+  (let ((org-slides-page-style 'split))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* First\n\nShort.\n\n* Last\n\n")
+      (dotimes (i 200)
+        (insert (format "Line %03d: final slide content.\n" i)))
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (org-slides-end)
+            (let ((count (length org-slides--split-pages)))
+              (should (> count 1))
+              (dotimes (_ (1- count))
+                (org-slides-next))
+              (let ((page org-slides--page-index)
+                    (slide org-slides--slide-number))
+                (should (= page (1- count)))
+                (org-slides-next)
+                (should (= org-slides--slide-number slide))
+                (should (= org-slides--page-index page)))))
         (org-slides-quit)))))
 
 (ert-deftest org-slides-test-default-keybindings ()
