@@ -9,6 +9,9 @@ Each top-level heading is one slide; the text before the first heading is the ti
 
 * Features
 
+#+DEMO: file:/home/jdyer/.emacs.d/offline-packages/local-packages/org-slides/CHANGELOG.org
+#+DEMO-TIMED-MACRO: poop
+
 - Default page/slide keys: =n= / right arrow forward, =p= / left arrow backward.  =SPC= reveals the next list item and =S-SPC= re-shadows the previous one; once the items are exhausted they advance/go back a page.  Revealed items stay revealed when revisiting a slide or sub-page.
 - =q= quits, =g= and =G= jump to the first and last slide.
 - In read-write mode the letter, space, and quit keys insert their characters instead, so the buffer remains editable.  =C-c C-n= and =C-c C-p= always navigate.
@@ -17,6 +20,7 @@ Each top-level heading is one slide; the text before the first heading is the ti
 - Long slides are paged automatically, one screenful at a time, in the same window.  The end of the slide is never cut off; =n=/=p= move through the pages and then to the next/previous slide.
 - Org list items can be stepped through one at a time: unrevealed items use the `org-slides-bullet-shadow' face, =SPC= or =f= reveals the next item, and =S-SPC= (or =b=/=S-TAB=/=Backspace=) puts the previous item back into shadow.  Nested list items are stepped individually.
 - Experimental split-page mode (=org-slides-page-style= set to =split=) narrows to one computed page at a time, shows only that page's content, and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window, prefer to start at a nested heading, and can be recomputed after a resize or text-scale change.
+- A demonstration pane can run beside the presentation.  A slide can name a demo with a =DEMO= property or a =#+DEMO:= line; the pane shows an Emacs buffer, file, URL, video, shell command, interactive shell, keyboard macro, timed keyboard macro, or the result of an Emacs Lisp expression.  =DEMO-MACRO= and =DEMO-TIMED-MACRO= replay recorded steps after the demo buffer opens.  =d= toggles the pane and =C-c C-o= moves focus between the slide and the demo.
 - The text scale in use before the presentation is restored on quit.
 - Overlay and cursor state is buffer-local, so multiple presentations do not clobber each other.
 - Optional one-page view with =C-c C-1=; this disables automatic paging and shows the whole buffer.
@@ -37,6 +41,20 @@ Requires Emacs 27.1+ and Org 9.4+.  The package is a single file.  Add its direc
 =spelling-menu= prefix; binding a key below =C-c s= would make that prefix
 shadow the spelling menu in Org buffers.
 
+If you also bind =C-c T= to =org-slides-timed-macro-toggle=, add that
+command to =:commands= (or autoload it explicitly).  With a deferred
+=use-package= form, the key can otherwise be pressed before the package
+is loaded, which signals =Wrong type argument: commandp=:
+
+#+begin_src emacs-lisp
+(use-package org-slides
+  :load-path "~/.emacs.d/local-packages/org-slides"
+  :commands (org-slides-start org-slides-timed-macro-toggle)
+  :bind (("C-c T" . org-slides-timed-macro-toggle)
+         :map org-mode-map
+         ("C-c P" . org-slides-start)))
+#+end_src
+
 In the offline toolkit the package lives under =local-packages/org-slides= and is loaded automatically by the rendered =init.el= when present.
 
 * Usage
@@ -50,6 +68,154 @@ For the experimental page-narrowing style, set:
 #+end_src
 
 Each tall slide is then split into pages that fit the window.  Only the current page's content is displayed, and the mode line shows =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =1.2 / 5.3=).  The total slide count is the number of top-level headings; the title page is slide 0 and is not included in that total.  By default the indicator is shown on every slide, including single-page slides and the title slide; set =org-slides-page-indicator= to =split= to show it only when a slide has more than one page.  Pages break at line boundaries; when possible, a break is moved back to a nested heading so the heading starts the next page.
+
+* Demonstrations beside the presentation
+
+A slide can run a demonstration in a side window.  Put a =DEMO= property in the slide, or a =#+DEMO:= line anywhere in the slide body:
+
+#+begin_src org
+,* Live demo
+#+DEMO: buffer:*Python*
+
+,* Video demo
+#+DEMO: video:~/videos/demo.mp4
+
+,* Shell demo
+#+DEMO: shell:
+
+,* Command demo
+#+DEMO: command:python3 demo.py
+
+,* Recorded demo
+#+DEMO: shell:
+#+DEMO-MACRO: my-shell-demo
+
+,* Self-playing macro
+#+DEMO: macro:my-demo
+#+end_src
+
+The pane opens when the slide is entered and closes when a slide without a demo is entered.  Set =org-slides-demo-default= to use one demo throughout the presentation, or =org-slides-demo-keep= to keep the previous slide's demo.  =#+DEMO: none= hides the pane explicitly.  =#+DEMO:= lines are hidden like other =#+= keyword lines, and a literal =#+DEMO:= inside a source or example block is ignored.
+
+The supported specs are:
+
+| Spec             | Meaning                                                        |
+|------------------+----------------------------------------------------------------|
+| =buffer:NAME=    | Show an existing Emacs buffer.                                 |
+| =file:PATH=      | Visit a file; video extensions are played as video.            |
+| =url:URL=        | Open a page with xwidget-webkit when available, otherwise EWW. |
+| =video:PATH=     | Play a video in the side window when xwidgets are available.   |
+| =video:URL=      | Play a video URL the same way.                                 |
+| =command:CMD=    | Run a shell command and show its output and exit status.       |
+| =shell:NAME=     | Start or reuse an interactive shell; NAME is optional.         |
+| =macro:NAME=     | Play a named keyboard macro in the demo pane.                  |
+| =timed-macro:NAME= | Play a timed macro with its recorded delays.                 |
+| =elisp:FORM=     | Evaluate FORM; it must return a buffer, a demo spec, or nil.   |
+| =external:PATH=  | Open a file or URL outside Emacs.                              |
+| =none=           | Hide the demo pane for this slide.                             |
+
+A bare path is treated as =file:= and a bare URL as =url:=.  The default spec is =nil=; set it in your configuration to reuse one demo:
+
+#+begin_src emacs-lisp
+(setq org-slides-demo-default "buffer:*scratch*")
+(setq org-slides-demo-width 0.4)        ; float is a frame fraction
+(setq org-slides-demo-side 'right)      ; or 'left
+(setq org-slides-demo-video-player "mpv --no-terminal")
+(setq org-slides-demo-video-backend 'auto) ; 'xwidget or 'external
+#+end_src
+
+With =video:=, =auto= uses an xwidget web view inside the side window when Emacs was built with xwidgets and is running on a graphical frame.  Otherwise it launches =org-slides-demo-video-player=: =nil= uses the system handler, a string is a shell command with the file or URL appended, and a function is called with the file or URL.  The external player process is stopped when the presentation quits when it was started from a command string or returned by the function.
+
+** Playing a recorded keyboard macro
+
+A demo can replay a keyboard macro.  The simplest form runs the macro in the side pane; if a demo buffer is already visible it is used, otherwise a scratch buffer is created:
+
+#+begin_src org
+,* Self-playing macro
+#+DEMO: macro:my-demo
+#+end_src
+
+To record and name a macro:
+
+1. Press =F3=, perform the steps you want to demonstrate, then press =F4=.
+2. Name the macro with =C-x C-k n=, for example =my-demo=.
+3. Save it for later sessions with =M-x insert-kbd-macro RET my-demo RET= and put the generated form in your init file.
+
+Macros stored in a register work too.  Use =C-x C-k x= to store the last macro in a register, then refer to it as =macro:register:a=.
+
+A =DEMO-MACRO= property or =#+DEMO-MACRO:= line plays a macro after the slide's =DEMO= buffer has been shown.  This is the natural pairing for a live shell, REPL, or file buffer:
+
+#+begin_src org
+* Recorded shell demo
+#+DEMO: shell:
+#+DEMO-MACRO: my-shell-demo
+#+end_src
+
+The macro runs with the demo window selected, so commands that act on the current window or buffer operate on the demo.  The demo-mode keys are temporarily disabled while the macro plays, so recorded =C-c= keys reach the demo buffer's major mode instead of the presentation controls.  Focus returns to the presentation when the macro finishes.  If a shell or REPL needs a moment to start, set =org-slides-demo-macro-delay= to a small number of seconds:
+
+#+begin_src emacs-lisp
+(setq org-slides-demo-macro-delay 0.5)
+#+end_src
+
+Press =m= in a read-only presentation to replay the slide's macro, or =C-c C-m= to choose a macro.  The same =C-c C-m= binding is available in the demo buffer.
+
+** Preserving the timing of recorded steps
+
+Normal Emacs keyboard macros store only the key events, not the pauses between them.  For a demo that should look like a person typing, record a *timed* macro instead.  The recorder stores each command's keys together with the elapsed time since recording started.
+
+Start recording with:
+
+#+begin_src org
+M-x org-slides-timed-macro-start
+#+end_src
+
+Perform the steps you want to demonstrate, then stop with:
+
+#+begin_src org
+M-x org-slides-timed-macro-stop
+#+end_src
+
+Inside a presentation or demo buffer, =C-c C-t= toggles timed recording.  It is best to bind =org-slides-timed-macro-toggle= to a key and start/stop with that key.  If you stop with =M-x org-slides-timed-macro-stop=, the =M-x= input itself becomes part of the recording.  Pressing =C-g= cancels and discards the recording in progress.
+
+The most recent recording is in =org-slides-timed-macro-last=.  Save it as a named variable with:
+
+#+begin_src org
+M-x org-slides-timed-macro-save RET my-timed-demo RET
+#+end_src
+
+Insert a persistent =setq= form into your init file with:
+
+#+begin_src org
+M-x org-slides-timed-macro-insert RET my-timed-demo RET
+#+end_src
+
+Use the named macro in a slide:
+
+#+begin_src org
+,* Timed demo
+#+DEMO: timed-macro:my-timed-demo
+
+,* Timed shell demo
+#+DEMO: shell:
+#+DEMO-TIMED-MACRO: my-timed-demo
+#+end_src
+
+=timed-macro:last= plays the most recent recording in the current session.  Playback uses the recorded delays; set =org-slides-timed-macro-speed= to a value other than 1.0 to speed up or slow down all delays.  A prefix argument to =M-x org-slides-timed-macro-play= prompts for a speed.  Playback is asynchronous: each step runs from a timer and the display is refreshed between steps, so the demo pane remains visible and Emacs is not blocked for the whole recording.  Stop it with =M-x org-slides-timed-macro-stop-playback=, by hiding the demo pane, or by changing slides.
+
+The recorder timestamps each command with =pre-command-hook= and =this-command-keys=.  It captures normal typing and minibuffer input, but not keys consumed inside a single command's own loop (for example while =isearch= or =query-replace= is active).  Mouse events may also replay unpredictably.
+
+The demo buffer gets its own =org-slides-demo-mode=, so you can drive the presentation without leaving it:
+
+| Key         | Command                                             |
+|-------------+-----------------------------------------------------|
+| =C-c C-o=   | Return to the presentation window                   |
+| =C-c C-d=   | Hide the demo pane                                  |
+| =C-c C-m=   | Play a keyboard macro in the demo pane              |
+| =C-c C-t=   | Start/stop recording a timed macro                  |
+| =C-c C-n=   | Next page or slide, keeping focus in the demo       |
+| =C-c C-p=   | Previous page or slide, keeping focus in the demo   |
+| =C-c C-q=   | Quit the presentation                               |
+
+In the presentation buffer, =d= or =C-c C-d= toggles the pane and =C-c C-o= moves focus to the demo (pressing it again returns to the slide).  When the buffer is writable, =d= inserts its character like the other navigation keys.
 
 * Default keys
 
@@ -74,11 +240,15 @@ Each tall slide is then split into pages that fit the window.  Only the current 
 | =C-c C-= / C-c C--=         | Increase/decrease text size                         |
 | =C-c C-r / C-c C-w=         | Read-only / read-write                              |
 | =C-c C-1=                   | Toggle the one-page view                            |
+| =d= / =C-c C-d=             | Toggle the demonstration pane                       |
+| =m= / =C-c C-m=             | Replay / choose a demo keyboard macro               |
+| =C-c C-t=                   | Start/stop recording a timed keyboard macro         |
+| =C-c C-o=                   | Move focus to the demo / back to the slide          |
 | =C-c <= / =C-c >=           | First/last slide                                    |
 
-The letter, =SPC=, =f=, and =S-SPC= keys only navigate while the buffer is read-only.  Turn off =org-slides-read-only-on-start= or use =C-c C-w= to edit, then use the arrow keys or =C-c C-n= / =C-c C-p= to navigate.
+The letter, =SPC=, =f=, =S-SPC=, =d=, and =m= keys only navigate while the buffer is read-only.  Turn off =org-slides-read-only-on-start= or use =C-c C-w= to edit, then use the arrow keys or =C-c C-n= / =C-c C-p= to navigate.
 
-Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC= can trigger the forward step.  In that case use =b=, =S-TAB=, =Backspace=, or =C-c C-b= for the backward step; =b= and =Backspace= retain their normal editing behavior when the buffer is writable.  =n=/=p= and the arrow keys move directly between pages or slides and bypass any unrevealed list items; =SPC=/=f= and =S-SPC=/=b= step through those items first.  In read-write mode, =f= inserts its character like any other letter.
+Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC= can trigger the forward step.  In that case use =b=, =S-TAB=, =Backspace=, or =C-c C-b= for the backward step; =b= and =Backspace= retain their normal editing behavior when the buffer is writable.  =n=/=p= and the arrow keys move directly between pages or slides and bypass any unrevealed list items; =SPC=/=f= and =S-SPC=/=b= step through those items first.  In read-write mode, =f=, =d=, and =m= insert their characters like any other letter.
 
 * Customization
 
@@ -95,6 +265,16 @@ Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC= can 
 (setq org-slides-page-indicator 'always) ; 'split for only multi-page, nil off
 (setq org-slides-page-break-at-headings t)
 (setq org-slides-incremental-bullets t) ; SPC/f and S-SPC/b step items
+(setq org-slides-demo-pane t)           ; allow per-slide demos
+(setq org-slides-demo-width 0.4)        ; frame fraction or columns
+(setq org-slides-demo-side 'right)      ; or 'left
+(setq org-slides-demo-default nil)      ; e.g. "buffer:*scratch*"
+(setq org-slides-demo-keep nil)         ; keep demo on slides without one
+(setq org-slides-demo-video-backend 'auto)
+(setq org-slides-demo-video-player nil) ; e.g. "mpv --no-terminal"
+(setq org-slides-demo-macro-delay 0)    ; wait before playing DEMO-MACRO
+(setq org-slides-timed-macro-speed 1.0) ; 1.0 = recorded timing
+(setq org-slides-demo-kill-buffers t)   ; clean temp demo buffers on quit
 #+end_src
 
 Unrevealed list items use the =org-slides-bullet-shadow= face, which inherits =shadow= by default.  Customize that face to change the dimmed text.  Set =org-slides-incremental-bullets= to =nil= to reveal all list items at once.  With split-page mode, items are collected per page; with scroll pagination, they are collected for the whole logical slide.  Reveal state is stored per slide and page, so once an item has been revealed it stays revealed when you navigate away and return with =n=/=p= or =SPC=/=S-SPC=.
@@ -133,6 +313,7 @@ For example, refresh =org-table-fit= overlays after each slide change:
 - Tall slides are automatically paged in a single window; org-present just narrows to the slide and lets the overflow run off the bottom.
 - List items can be revealed one at a time with =SPC=/=f= and re-shadowed with =S-SPC=/=b=; nested items step individually.
 - An experimental split-page style narrows to each computed page, shows only that page's content, and reports =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= in the mode line.
+- A per-slide demonstration pane can show an Emacs buffer, file, URL, video, shell command, or Lisp-produced buffer beside the presentation.
 - The one-page view is respected by next/previous navigation.
 - Modern Org calls are used (=org-get-previous-sibling=, =outline-show-all=).
 - Setup and teardown are handled by the minor mode itself, so no mode hooks are required just to display images, hide the cursor, or make the buffer read-only.

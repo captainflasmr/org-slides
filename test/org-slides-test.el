@@ -9,6 +9,7 @@
 
 (require 'ert)
 (require 'org)
+(require 'kmacro)
 (require 'org-slides)
 
 (defconst org-slides-test--document
@@ -29,6 +30,13 @@ Text two.
     (dotimes (i (length org-slides--bullet-overlays) count)
       (when (overlayp (aref org-slides--bullet-overlays i))
         (setq count (1+ count))))))
+
+(defun org-slides-test--wait-for-timed-playback ()
+  "Wait for asynchronous timed macro playback to finish."
+  (let ((deadline (+ (float-time) 5)))
+    (while (and org-slides--timed-macro-playback
+                (< (float-time) deadline))
+      (sit-for 0.01))))
 
 (defun org-slides-test--overlay-covering (position)
   "Return the org-slides invisible overlay covering POSITION, or nil."
@@ -487,6 +495,332 @@ Text two.
             (should (equal (cdr (car seen)) "One"))
           (org-slides-quit))))
     (should seen)))
+
+(ert-deftest org-slides-test-demo-spec-parsing ()
+  "Demo specs are parsed into a kind and a value."
+  (should (equal (org-slides--demo-parse-spec "buffer:*scratch*")
+                 '(buffer . "*scratch*")))
+  (should (equal (org-slides--demo-parse-spec "file:~/demo.org")
+                 '(file . "~/demo.org")))
+  (should (equal (org-slides--demo-parse-spec "/tmp/demo.org")
+                 '(file . "/tmp/demo.org")))
+  (should (equal (org-slides--demo-parse-spec "https://example.com")
+                 '(url . "https://example.com")))
+  (should (equal (org-slides--demo-parse-spec "video:/tmp/a.mp4")
+                 '(video . "/tmp/a.mp4")))
+  (should (equal (org-slides--demo-parse-spec "shell:*demo*")
+                 '(shell . "*demo*")))
+  (should (eq (car (org-slides--demo-parse-spec "none")) 'none))
+  (should (org-slides--demo-video-file-p "clip.MP4"))
+  (should-not (org-slides--demo-video-file-p "notes.org")))
+
+(ert-deftest org-slides-test-demo-spec-from-slide ()
+  "Properties and #+DEMO lines select the demo for a slide."
+  (with-temp-buffer
+    (org-mode)
+    (insert "* One\n:PROPERTIES:\n:DEMO: buffer:one\n:END:\n\n"
+            "* Two\n\n#+DEMO: buffer:two\n\n"
+            "* Three\n\n#+begin_src org\n#+DEMO: buffer:literal\n#+end_src\n\n"
+            "#+DEMO: buffer:three\n")
+    (goto-char (point-min))
+    (org-slides-narrow)
+    (should (equal (org-slides--demo-spec-for-slide) "buffer:one"))
+    (widen)
+    (goto-char (point-min))
+    (search-forward "* Two")
+    (goto-char (line-beginning-position))
+    (org-slides-narrow)
+    (should (equal (org-slides--demo-spec-for-slide) "buffer:two"))
+    (widen)
+    (goto-char (point-min))
+    (search-forward "* Three")
+    (goto-char (line-beginning-position))
+    (org-slides-narrow)
+    (should (equal (org-slides--demo-spec-for-slide) "buffer:three"))))
+
+(ert-deftest org-slides-test-demo-spec-on-split-page ()
+  "A demo spec is still found after narrowing to a split page."
+  (let ((org-slides-page-style 'split)
+        (org-slides-demo-pane nil))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* One\n\n#+DEMO: buffer:demo\n\n")
+      (dotimes (i 100)
+        (insert (format "Line %03d for the page splitter.\n" i)))
+      (goto-char (point-min))
+      (org-slides-start)
+      (unwind-protect
+          (progn
+            (should (> (length org-slides--split-pages) 1))
+            (org-slides-next)
+            (should (buffer-narrowed-p))
+            (should (equal (org-slides--demo-spec-for-slide) "buffer:demo")))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-demo-show-hide ()
+  "The demo pane shows a buffer in a side window and hides cleanly."
+  (let ((demo (get-buffer-create "org-slides-test-demo")))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "* One\n\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (unwind-protect
+              (progn
+                (org-slides-demo-show "buffer:org-slides-test-demo")
+                (let ((window (org-slides--demo-window)))
+                  (should (window-live-p window))
+                  (should (eq (window-buffer window) demo))
+                  (should (eq (window-parameter window 'window-side) 'right))
+                  (should (buffer-local-value 'org-slides-demo-mode demo)))
+                (org-slides-demo-hide)
+                (should-not (org-slides--demo-window))
+                (should-not (buffer-local-value 'org-slides-demo-mode demo))
+                (should (equal org-slides--demo-spec
+                               "buffer:org-slides-test-demo")))
+            (org-slides-quit)))
+      (kill-buffer demo))))
+
+(ert-deftest org-slides-test-demo-follows-slides ()
+  "The demo pane follows per-slide specs and hides when absent."
+  (let ((demo (get-buffer-create "org-slides-test-demo")))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "* One\n\n#+DEMO: buffer:org-slides-test-demo\n\n"
+                  "* Two\n\nNo demo here.\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (unwind-protect
+              (progn
+                (should (org-slides--demo-window))
+                (should (equal org-slides--demo-spec
+                               "buffer:org-slides-test-demo"))
+                (org-slides-next)
+                (should-not (org-slides--demo-window))
+                (should-not org-slides--demo-spec)
+                (org-slides-prev)
+                (should (org-slides--demo-window))
+                (should (equal org-slides--demo-spec
+                               "buffer:org-slides-test-demo")))
+            (org-slides-quit)))
+      (kill-buffer demo))))
+
+(ert-deftest org-slides-test-demo-keybindings ()
+  "The demo commands have presentation and demo-buffer bindings."
+  (should (eq (lookup-key org-slides-mode-map (kbd "d"))
+              #'org-slides-demo-toggle-or-self-insert))
+  (should (eq (lookup-key org-slides-mode-map (kbd "C-c C-d"))
+              #'org-slides-demo-toggle))
+  (should (eq (lookup-key org-slides-mode-map (kbd "C-c C-o"))
+              #'org-slides-demo-select))
+  (should (eq (lookup-key org-slides-mode-map (kbd "m"))
+              #'org-slides-demo-play-macro-or-self-insert))
+  (should (eq (lookup-key org-slides-mode-map (kbd "C-c C-m"))
+              #'org-slides-demo-play-macro))
+  (should (eq (lookup-key org-slides-mode-map (kbd "C-c C-t"))
+              #'org-slides-timed-macro-toggle))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-m"))
+              #'org-slides-demo-play-macro))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-t"))
+              #'org-slides-timed-macro-toggle))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-n"))
+              #'org-slides-demo-next))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-p"))
+              #'org-slides-demo-prev))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-q"))
+              #'org-slides-demo-quit)))
+
+(ert-deftest org-slides-test-demo-file ()
+  "A file demo visits the file in a buffer."
+  (let ((file (make-temp-file "org-slides-demo-" nil ".txt")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "demo"))
+          (let ((buffer (org-slides--demo-open-file file)))
+            (unwind-protect
+                (progn
+                  (should (equal (buffer-file-name buffer) file))
+                  (with-current-buffer buffer
+                    (should (equal (buffer-string) "demo"))))
+              (kill-buffer buffer))))
+      (delete-file file))))
+
+(ert-deftest org-slides-test-demo-video-page ()
+  "Video demos are wrapped in a local HTML page."
+  (let ((video (make-temp-file "org-slides-demo-" nil ".mp4")))
+    (unwind-protect
+        (progn
+          (with-temp-file video (insert "not really a video"))
+          (let ((url (org-slides--demo-video-page video))
+                (page (car org-slides--demo-temp-files)))
+            (should (string-prefix-p "file://" url))
+            (should (file-exists-p page))
+            (with-temp-buffer
+              (insert-file-contents page)
+              (should (string-match-p "<video" (buffer-string)))
+              (should (string-match-p "file://" (buffer-string))))))
+      (dolist (page org-slides--demo-temp-files)
+        (when (file-exists-p page)
+          (delete-file page)))
+      (setq org-slides--demo-temp-files nil)
+      (delete-file video))))
+
+(ert-deftest org-slides-test-demo-macro-spec ()
+  "A macro: demo plays a named keyboard macro in the side pane."
+  (let ((last-kbd-macro (string-to-vector "hello"))
+        (org-slides-demo-macro-delay 0))
+    (kmacro-name-last-macro 'org-slides-test-macro)
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "* One\n\n#+DEMO: macro:org-slides-test-macro\n\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (unwind-protect
+              (let ((buffer (window-buffer (org-slides--demo-window))))
+                (with-current-buffer buffer
+                  (should (equal (buffer-string) "hello"))))
+            (org-slides-quit)))
+      (fmakunbound 'org-slides-test-macro))))
+
+(ert-deftest org-slides-test-demo-macro-follows-buffer ()
+  "DEMO-MACRO plays after the slide's demo buffer is shown."
+  (let ((last-kbd-macro (string-to-vector "typed"))
+        (org-slides-demo-macro-delay 0)
+        (demo (get-buffer-create "org-slides-test-demo")))
+    (kmacro-name-last-macro 'org-slides-test-macro)
+    (with-current-buffer demo
+      (erase-buffer)
+      (fundamental-mode))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "* One\n\n#+DEMO: buffer:org-slides-test-demo\n"
+                  "#+DEMO-MACRO: org-slides-test-macro\n\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (unwind-protect
+              (progn
+                (should (equal (with-current-buffer demo (buffer-string))
+                               "typed"))
+                (should (equal org-slides--demo-macro
+                               "org-slides-test-macro")))
+            (org-slides-quit)))
+      (kill-buffer demo)
+      (fmakunbound 'org-slides-test-macro))))
+
+(ert-deftest org-slides-test-demo-macro-register ()
+  "A demo can play a keyboard macro stored in a register."
+  (set-register ?z (string-to-vector "reg"))
+  (unwind-protect
+      (with-temp-buffer
+        (org-mode)
+        (insert "* One\n\n#+DEMO: macro:register:z\n\n")
+        (goto-char (point-min))
+        (org-slides-start)
+        (unwind-protect
+            (let ((buffer (window-buffer (org-slides--demo-window))))
+              (with-current-buffer buffer
+                (should (equal (buffer-string) "reg"))))
+          (org-slides-quit)))
+    (set-register ?z nil)))
+
+(ert-deftest org-slides-test-timed-macro-p ()
+  "Timed macro entries are validated."
+  (should (org-slides--timed-macro-p '((0.1 . "a") (0.2 . [98]))))
+  (should-not (org-slides--timed-macro-p '((a . "x"))))
+  (should-not (org-slides--timed-macro-p '((0.1 . nil))))
+  (should-not (org-slides--timed-macro-p nil)))
+
+(ert-deftest org-slides-test-timed-macro-recording ()
+  "Recording stores keys with their inter-command delays."
+  (let ((org-slides-timed-macro-last nil))
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (unwind-protect
+          (progn
+            (org-slides-timed-macro-start)
+            (execute-kbd-macro (string-to-vector "ab"))
+            (org-slides-timed-macro-stop)
+            (should (equal (buffer-string) "ab"))
+            (should (equal (mapcar #'cdr org-slides-timed-macro-last)
+                           '("a" "b")))
+            (should (= (length org-slides-timed-macro-last) 2)))
+        (when org-slides--timed-macro-recording
+          (org-slides--timed-macro-cancel))))))
+
+(ert-deftest org-slides-test-timed-macro-demo ()
+  "A timed-macro: demo replays recorded steps in the side pane."
+  (setq org-slides-test-timed '((0.01 . "a") (0.01 . "b")))
+  (unwind-protect
+      (let ((org-slides-timed-macro-speed 0))
+        (with-temp-buffer
+          (org-mode)
+          (insert "* One\n\n#+DEMO: timed-macro:org-slides-test-timed\n\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (org-slides-test--wait-for-timed-playback)
+          (unwind-protect
+              (let ((buffer (window-buffer (org-slides--demo-window))))
+                (with-current-buffer buffer
+                  (should (equal (buffer-string) "ab"))))
+            (org-slides-quit))))
+    (makunbound 'org-slides-test-timed)))
+
+(ert-deftest org-slides-test-timed-macro-follows-buffer ()
+  "DEMO-TIMED-MACRO replays after the slide's demo buffer appears."
+  (setq org-slides-test-timed '((0.01 . "t") (0.01 . "d")))
+  (let ((org-slides-timed-macro-speed 0)
+        (demo (get-buffer-create "org-slides-test-demo")))
+    (with-current-buffer demo
+      (erase-buffer)
+      (fundamental-mode))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "* One\n\n#+DEMO: buffer:org-slides-test-demo\n"
+                  "#+DEMO-TIMED-MACRO: org-slides-test-timed\n\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (org-slides-test--wait-for-timed-playback)
+          (unwind-protect
+              (progn
+                (should (equal (with-current-buffer demo (buffer-string))
+                               "td"))
+                (should (equal org-slides--demo-timed-macro
+                               "org-slides-test-timed")))
+            (org-slides-quit)))
+      (kill-buffer demo)
+      (makunbound 'org-slides-test-timed))))
+
+(ert-deftest org-slides-test-timed-macro-resolve ()
+  "Timed macros resolve from variables and the last recording."
+  (setq org-slides-test-timed '((0.1 . "a")))
+  (unwind-protect
+      (progn
+        (should (equal (org-slides--timed-macro-resolve
+                        "org-slides-test-timed")
+                       '((0.1 . "a"))))
+        (should-error (org-slides--timed-macro-resolve "missing")))
+    (makunbound 'org-slides-test-timed)))
+
+(ert-deftest org-slides-test-demo-command-output ()
+  "A command demo runs asynchronously and collects its output."
+  (let* ((buffer (org-slides--demo-open-command "printf demo-output"))
+         (process (car org-slides--demo-processes))
+         (deadline (+ (float-time) 5)))
+    (unwind-protect
+        (progn
+          (while (and (process-live-p process)
+                      (< (float-time) deadline))
+            (accept-process-output process 0.1))
+          (with-current-buffer buffer
+            (should (string-match-p "demo-output" (buffer-string)))))
+      (when (process-live-p process)
+        (delete-process process))
+      (kill-buffer buffer))))
 
 (provide 'org-slides-test)
 ;;; org-slides-test.el ends here

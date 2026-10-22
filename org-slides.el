@@ -50,6 +50,11 @@
 ;; - Slides taller than the window are paged one screenful at a time in the
 ;;   same window.  `n'/`p' walk the pages before moving to another slide.
 ;; - The text scale in use before the presentation is restored on quit.
+;; - A side demo pane can show a buffer, file, URL, video, shell, command,
+;;   or keyboard macro while slides are presented.  A slide selects its
+;;   demo with a `DEMO' property or `#+DEMO:' line; `DEMO-MACRO' replays
+;;   recorded keys after the demo buffer appears.  See
+;;   `org-slides-demo-show' and `org-slides-demo-play-macro'.
 ;; - Overlay and cursor state is buffer-local, so multiple presentations do
 ;;   not clobber each other.
 ;;
@@ -62,7 +67,11 @@
 
 (require 'org)
 (require 'org-element)
+(require 'kmacro)
 (require 'subr-x)
+(require 'url-util)
+
+(defvar eww-buffer-name)
 
 (defgroup org-slides nil
   "Minimalist presentation mode for Org buffers."
@@ -164,6 +173,95 @@ SPC advances to the next page or slide."
   :type 'boolean
   :group 'org-slides)
 
+(defcustom org-slides-demo-pane t
+  "Whether to allow a demonstration pane beside the presentation.
+When non-nil, slides can request a demo with a `DEMO' property or a
+`#+DEMO:' line.  The demo is shown in a side window and is updated
+when the presentation moves to another slide."
+  :type 'boolean
+  :group 'org-slides)
+
+(defcustom org-slides-demo-width 0.4
+  "Width of the demo side window.
+An integer is a number of columns and a float is a fraction of the
+frame width.  The presentation keeps the remaining space."
+  :type 'number
+  :group 'org-slides)
+
+(defcustom org-slides-demo-side 'right
+  "Side of the frame used for the demo window."
+  :type '(choice (const :tag "Right" right)
+                 (const :tag "Left" left))
+  :group 'org-slides)
+
+(defcustom org-slides-demo-default nil
+  "Demo spec used on slides that do not define their own.
+The value uses the same syntax as `org-slides-demo-show', for example
+\"buffer:*scratch*\" or \"file:~/demo.org\"."
+  :type '(choice (const :tag "None" nil)
+                 (string :tag "Demo spec"))
+  :group 'org-slides)
+
+(defcustom org-slides-demo-keep nil
+  "Whether to keep the current demo on a slide without a demo spec.
+When nil, moving to a slide with no `DEMO' property, no `#+DEMO:'
+line, and no `org-slides-demo-default' hides the demo pane."
+  :type 'boolean
+  :group 'org-slides)
+
+(defcustom org-slides-demo-video-backend 'auto
+  "How `video:' demo specs are played.
+`auto' uses an xwidget web view inside Emacs when xwidgets are
+available, and falls back to `org-slides-demo-video-player' otherwise.
+`xwidget' requires an Emacs built with xwidgets and a graphical frame.
+`external' always launches an external player."
+  :type '(choice (const :tag "Automatic" auto)
+                 (const :tag "xwidget inside Emacs" xwidget)
+                 (const :tag "External player" external))
+  :group 'org-slides)
+
+(defcustom org-slides-demo-video-player nil
+  "Program used to play video demos outside Emacs.
+When nil, files are opened with `org-open-file' and URLs with
+`browse-url'.  A string is run as a shell command with the file or URL
+appended.  A function is called with the file or URL as its only
+argument; if it returns a process, that process is stopped when the
+presentation quits."
+  :type '(choice (const :tag "System default" nil)
+                 (string :tag "Shell command")
+                 (function :tag "Function"))
+  :group 'org-slides)
+
+(defcustom org-slides-demo-video-extensions
+  '("avi" "flv" "m4v" "mkv" "mov" "mp4" "mpeg" "mpg" "ogv" "ogg"
+    "webm" "wmv")
+  "File extensions treated as videos by `file:' demo specs."
+  :type '(repeat string)
+  :group 'org-slides)
+
+(defcustom org-slides-demo-kill-buffers t
+  "Whether to kill temporary buffers created for demos on quit.
+Buffers belonging to files, `buffer:' specs, and expressions are not
+killed.  Command output, shell, EWW, xwidget, and macro scratch
+buffers created for a demo are killed when this is non-nil."
+  :type 'boolean
+  :group 'org-slides)
+
+(defcustom org-slides-demo-macro-delay 0
+  "Seconds to wait before playing a slide's demo macro.
+A positive value gives a newly started shell, REPL, or web view time to
+settle before the recorded keys arrive.  Zero plays the macro as soon
+as the demo buffer is displayed."
+  :type 'number
+  :group 'org-slides)
+
+(defcustom org-slides-timed-macro-speed 1.0
+  "Default playback speed for timed keyboard macros.
+1.0 reproduces the recorded delays.  Values below 1.0 are faster and
+values above 1.0 are slower."
+  :type 'number
+  :group 'org-slides)
+
 (defface org-slides-bullet-shadow
   '((t (:inherit shadow)))
   "Face used for Org list items that have not been revealed yet."
@@ -236,6 +334,90 @@ Each function is called with the buffer name and current heading.")
 (defvar-local org-slides--original-window-start nil
   "Marker for the window start before the presentation began.")
 
+(defvar-local org-slides--demo-window nil
+  "Side window currently showing the demo.")
+
+(defvar-local org-slides--demo-buffer nil
+  "Buffer currently shown in the demo pane.")
+
+(defvar-local org-slides--demo-spec nil
+  "Demo spec for the current slide, or the symbol `none'.")
+
+(defvar-local org-slides--demo-macro nil
+  "Keyboard macro requested for the current slide's demo.")
+
+(defvar-local org-slides--demo-timed-macro nil
+  "Timed keyboard macro requested for the current slide's demo.")
+
+(defvar-local org-slides--demo-macro-timer nil
+  "Pending timer for a delayed demo macro.")
+
+(defvar-local org-slides--demo-presentation-buffer nil
+  "Presentation buffer associated with this buffer.
+It is set in the presentation buffer and in buffers shown in its demo
+pane, so demo commands work from either window.")
+
+(defvar-local org-slides--demo-processes nil
+  "Processes started for the current presentation's demo.")
+
+(defvar-local org-slides--demo-created-buffers nil
+  "Temporary buffers created for the current presentation's demo.")
+
+(defvar-local org-slides--demo-temp-files nil
+  "Temporary files created for the current presentation's demo.")
+
+(defvar org-slides-demo-history nil
+  "History of demo specs entered with `org-slides-demo-show'.")
+
+(defvar org-slides-demo-macro-history nil
+  "History of macro names entered with `org-slides-demo-play-macro'.")
+
+(defvar org-slides-timed-macro-last nil
+  "The most recently recorded timed keyboard macro.
+Each entry is a cons (TIMESTAMP . KEYS), where TIMESTAMP is seconds
+since recording started and KEYS is a string or vector accepted by
+`execute-kbd-macro'.")
+
+(defvar org-slides--timed-macro-recording nil
+  "Non-nil while a timed keyboard macro is being recorded.")
+
+(defvar org-slides--timed-macro-entries nil
+  "Entries recorded for the current timed macro, newest first.")
+
+(defvar org-slides--timed-macro-start-time nil
+  "Start time of the current timed macro recording.")
+
+(defvar org-slides--timed-macro-playback nil
+  "Active asynchronous timed macro playback state.
+A plist with the entries, index, start time, speed, target window,
+demo flag, presentation buffer, and return window.")
+
+(defvar org-slides-timed-macro-history nil
+  "History of timed macro names.")
+
+(defvar org-slides-demo-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-o") #'org-slides-demo-select)
+    (define-key map (kbd "C-c C-d") #'org-slides-demo-toggle)
+    (define-key map (kbd "C-c C-m") #'org-slides-demo-play-macro)
+    (define-key map (kbd "C-c C-t") #'org-slides-timed-macro-toggle)
+    (define-key map (kbd "C-c C-n") #'org-slides-demo-next)
+    (define-key map (kbd "C-c C-p") #'org-slides-demo-prev)
+    (define-key map (kbd "C-c C-q") #'org-slides-demo-quit)
+    map)
+  "Keymap for `org-slides-demo-mode'.")
+
+;;;###autoload
+(define-minor-mode org-slides-demo-mode
+  "Minor mode for buffers displayed in the org-slides demo pane.
+It adds keys to return to the presentation, hide the demo, play a
+keyboard macro, start or stop timed macro recording, and drive slide
+navigation without leaving the demo buffer."
+  :init-value nil
+  :lighter " Demo"
+  :keymap org-slides-demo-mode-map
+  :group 'org-slides)
+
 (defvar org-slides-mode-map
   (let ((map (make-sparse-keymap)))
     ;; Forward/backward.  The -or-self-insert commands keep the buffer
@@ -257,6 +439,13 @@ Each function is called with the buffer name and current heading.")
     (define-key map [prior] #'org-slides-prev)
     (define-key map (kbd "C-c C-n") #'org-slides-next)
     (define-key map (kbd "C-c C-p") #'org-slides-prev)
+    ;; Demonstration pane.
+    (define-key map (kbd "d") #'org-slides-demo-toggle-or-self-insert)
+    (define-key map (kbd "m") #'org-slides-demo-play-macro-or-self-insert)
+    (define-key map (kbd "C-c C-d") #'org-slides-demo-toggle)
+    (define-key map (kbd "C-c C-m") #'org-slides-demo-play-macro)
+    (define-key map (kbd "C-c C-t") #'org-slides-timed-macro-toggle)
+    (define-key map (kbd "C-c C-o") #'org-slides-demo-select)
     ;; First/last and quit.
     (define-key map (kbd "g") #'org-slides-beginning-or-self-insert)
     (define-key map (kbd "G") #'org-slides-end-or-self-insert)
@@ -811,6 +1000,7 @@ When REVEALED is non-nil, list items start in the foreground."
              org-slides-page-indicator
              (not org-slides--one-big-page))
     (setq org-slides--slide-number (org-slides--compute-slide-number)))
+  (org-slides--update-demo)
   (org-slides-run-after-navigate-functions)
   (cond
    (org-slides--one-big-page
@@ -1064,7 +1254,9 @@ example block visible."
     (setq org-slides--started t
           org-slides--one-big-page nil
           org-slides--slide-number 0
-          org-slides--bullet-state (make-hash-table :test 'equal))
+          org-slides--bullet-state (make-hash-table :test 'equal)
+          org-slides--demo-presentation-buffer (current-buffer))
+    (org-slides--demo-reset)
     (org-slides--clear-slide-numbers)
     (setq org-slides--original-mode-line-process mode-line-process)
     (org-slides--clear-pagination)
@@ -1097,6 +1289,7 @@ example block visible."
   "Undo the presentation state in the current buffer."
   (when org-slides--started
     (setq org-slides--started nil)
+    (org-slides--demo-reset)
     (org-slides--restore-scale)
     (when org-slides--images-displayed
       (org-slides--remove-inline-images)
@@ -1107,7 +1300,8 @@ example block visible."
     (setq org-slides--cursor-cache nil
           org-slides--one-big-page nil
           org-slides--slide-number 0
-          org-slides--bullet-state nil)
+          org-slides--bullet-state nil
+          org-slides--demo-presentation-buffer nil)
     (remove-hook 'text-scale-mode-hook
                  #'org-slides--refresh-split-pages t)
     (remove-hook 'buffer-face-mode-hook
@@ -1150,6 +1344,1208 @@ Each top-level heading is one slide.  Use `org-slides-start' to begin."
   "Quit the current Org presentation."
   (interactive)
   (org-slides-mode -1))
+
+;;; Demo pane
+
+(defun org-slides--demo-url-p (string)
+  "Return non-nil when STRING has a URL scheme."
+  (and (stringp string)
+       (string-match-p "\\`[A-Za-z][A-Za-z0-9+.-]*://" string)))
+
+(defun org-slides--demo-file-url (path)
+  "Return a file URL for PATH."
+  (concat "file://"
+          (url-hexify-string (expand-file-name path)
+                             (append url-unreserved-chars '(?/ ?:)))))
+
+(defun org-slides--demo-video-file-p (file)
+  "Return non-nil when FILE has a configured video extension."
+  (let ((extension (downcase (or (file-name-extension file) ""))))
+    (and (not (string-empty-p extension))
+         (member extension org-slides-demo-video-extensions))))
+
+(defun org-slides--demo-parse-spec (spec)
+  "Return (KIND . VALUE) for demo SPEC.
+KIND is one of `buffer', `file', `url', `video', `command', `shell',
+`macro', `timed-macro', `elisp', `external', or `none'.  A spec without
+a recognized prefix is a file path; a bare URL is a URL."
+  (let* ((spec (string-trim (if (symbolp spec) (symbol-name spec) spec)))
+         (colon (string-match ":" spec))
+         (kind (and colon
+                    (intern-soft (downcase (substring spec 0 colon))))))
+    (cond
+     ((or (eq kind 'none)
+          (string-equal (downcase spec) "none"))
+      (cons 'none nil))
+     ((and kind
+           (memq kind '(buffer file url video command shell macro
+                               timed-macro elisp external)))
+      (cons kind (string-trim (substring spec (1+ colon)))))
+     ((org-slides--demo-url-p spec)
+      (cons 'url spec))
+     (t
+      (cons 'file spec)))))
+
+(defun org-slides--demo-none-spec-p (spec)
+  "Return non-nil when SPEC disables the demo pane."
+  (or (eq spec 'none)
+      (and (stringp spec)
+           (eq (car (org-slides--demo-parse-spec spec)) 'none))))
+
+(defun org-slides--demo-presentation ()
+  "Return the presentation buffer for the current demo context."
+  (cond
+   ((buffer-live-p org-slides--demo-presentation-buffer)
+    org-slides--demo-presentation-buffer)
+   (org-slides-mode
+    (current-buffer))
+   (t nil)))
+
+(defun org-slides--demo-window (&optional presentation)
+  "Return the demo window for PRESENTATION, or nil.
+PRESENTATION defaults to the active presentation buffer."
+  (let ((presentation (or presentation
+                          (org-slides--demo-presentation)
+                          (current-buffer))))
+    (or (and (window-live-p org-slides--demo-window)
+             (eq (window-parameter org-slides--demo-window
+                                   'org-slides-demo-presentation)
+                 presentation)
+             org-slides--demo-window)
+        (let (found)
+          (dolist (window (window-list nil 'nomini))
+            (when (and (not found)
+                       (window-parameter window 'org-slides-demo)
+                       (eq (window-parameter window
+                                             'org-slides-demo-presentation)
+                           presentation))
+              (setq found window)))
+          found))))
+
+(defun org-slides--demo-xwidget-available-p ()
+  "Return non-nil when xwidget-webkit can be used in this session."
+  (and (display-graphic-p)
+       (require 'xwidget nil t)
+       (featurep 'xwidget-internal)))
+
+(defun org-slides--demo-open-xwidget (url)
+  "Open URL in a new xwidget session and return its buffer."
+  (let ((before (buffer-list))
+        buffer)
+    (save-window-excursion
+      (xwidget-webkit-browse-url url t))
+    (dolist (candidate (buffer-list))
+      (unless (or buffer (memq candidate before))
+        (with-current-buffer candidate
+          (when (eq major-mode 'xwidget-webkit-mode)
+            (setq buffer candidate)))))
+    (setq buffer
+          (or buffer
+              (and (boundp 'xwidget-webkit-last-session-buffer)
+                   (buffer-live-p xwidget-webkit-last-session-buffer)
+                   xwidget-webkit-last-session-buffer)))
+    (unless buffer
+      (user-error "Could not open an xwidget session"))
+    (unless (memq buffer before)
+      (push buffer org-slides--demo-created-buffers))
+    buffer))
+
+(defun org-slides--demo-video-page (path)
+  "Create an HTML page that plays PATH and return its file URL."
+  (let* ((source (org-slides--demo-file-url path))
+         (html (make-temp-file "org-slides-video-" nil ".html")))
+    (with-temp-file html
+      (insert
+       "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n"
+       "<style>html,body{margin:0;height:100%;background:#000;}"
+       "video{width:100%;height:100%;object-fit:contain;}</style>\n"
+       "</head><body><video controls autoplay playsinline src=\""
+       source "\"></video></body></html>\n"))
+    (push html org-slides--demo-temp-files)
+    (org-slides--demo-file-url html)))
+
+(defun org-slides--demo-play-external (value)
+  "Play VALUE with the configured external video player."
+  (let ((target (if (org-slides--demo-url-p value)
+                    value
+                  (expand-file-name value))))
+    (cond
+     ((functionp org-slides-demo-video-player)
+      (let ((result (funcall org-slides-demo-video-player target)))
+        (when (processp result)
+          (push result org-slides--demo-processes))
+        result))
+     ((and (stringp org-slides-demo-video-player)
+           (not (string-empty-p org-slides-demo-video-player)))
+      (let ((process
+             (start-process
+              "org-slides-video" nil
+              (or shell-file-name "/bin/sh")
+              (or shell-command-switch "-c")
+              (concat org-slides-demo-video-player " "
+                      (shell-quote-argument target)))))
+        (push process org-slides--demo-processes)
+        (message "Org Slides: playing video with %s"
+                 org-slides-demo-video-player)))
+     ((org-slides--demo-url-p value)
+      (browse-url target))
+     (t
+      (org-open-file target)))))
+
+(defun org-slides--demo-open-video (value)
+  "Open VALUE as a video, returning a buffer or nil for an external player."
+  (unless (or (org-slides--demo-url-p value)
+              (file-exists-p (expand-file-name value)))
+    (user-error "Video file does not exist: %s" value))
+  (cond
+   ((and (memq org-slides-demo-video-backend '(auto xwidget))
+         (org-slides--demo-xwidget-available-p))
+    (org-slides--demo-open-xwidget
+     (if (org-slides--demo-url-p value)
+         value
+       (org-slides--demo-video-page value))))
+   ((eq org-slides-demo-video-backend 'xwidget)
+    (user-error "xwidget video playback is not available in this Emacs"))
+   (t
+    (org-slides--demo-play-external value)
+    nil)))
+
+(defun org-slides--demo-open-eww (url)
+  "Open URL with EWW and return the EWW buffer."
+  (require 'eww)
+  (let ((before (buffer-list))
+        buffer)
+    (save-window-excursion
+      (eww url))
+    (dolist (candidate (buffer-list))
+      (unless (or buffer (memq candidate before))
+        (with-current-buffer candidate
+          (when (derived-mode-p 'eww-mode)
+            (setq buffer candidate)))))
+    (setq buffer (or buffer (get-buffer eww-buffer-name)))
+    (unless buffer
+      (user-error "Could not open URL in EWW"))
+    (unless (memq buffer before)
+      (push buffer org-slides--demo-created-buffers))
+    buffer))
+
+(defun org-slides--demo-open-url (url)
+  "Open URL in Emacs and return the buffer showing it."
+  (if (org-slides--demo-xwidget-available-p)
+      (org-slides--demo-open-xwidget url)
+    (org-slides--demo-open-eww url)))
+
+(defun org-slides--demo-open-file (path)
+  "Open PATH for a demo and return its buffer.
+Video files are played by `org-slides--demo-open-video'."
+  (let ((file (expand-file-name path)))
+    (cond
+     ((file-directory-p file)
+      (dired-noselect file))
+     ((org-slides--demo-video-file-p file)
+      (org-slides--demo-open-video file))
+     ((file-exists-p file)
+      (find-file-noselect file t))
+     (t
+      (user-error "Demo file does not exist: %s" file)))))
+
+(defun org-slides--demo-open-shell (name)
+  "Start or reuse a shell for a demo and return its buffer.
+NAME is the buffer name, or an empty string for `*shell*'."
+  (require 'shell)
+  (let* ((name (if (string-empty-p name) "*shell*" name))
+         (existing (get-buffer name))
+         (buffer (save-window-excursion (shell name))))
+    (unless (buffer-live-p buffer)
+      (setq buffer (get-buffer name)))
+    (unless buffer
+      (user-error "Could not start a shell"))
+    (unless existing
+      (push buffer org-slides--demo-created-buffers))
+    buffer))
+
+(defun org-slides--demo-command-sentinel (process event)
+  "Record the end of demo command PROCESS in its output buffer."
+  (let ((buffer (process-buffer process)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (insert (format "\n[%s]" (string-trim event))))))))
+
+(defun org-slides--demo-open-command (command)
+  "Run COMMAND for a demo and return its output buffer."
+  (let* ((directory default-directory)
+         (name (format "*org-slides-demo: %s*"
+                       (substring command 0 (min 40 (length command)))))
+         (buffer (generate-new-buffer name)))
+    (with-current-buffer buffer
+      (setq default-directory directory)
+      (insert (format "$ %s\n\n" command)))
+    (condition-case err
+        (let ((process
+               (make-process
+                :name (buffer-name buffer)
+                :buffer buffer
+                :command (list (or shell-file-name "/bin/sh")
+                               (or shell-command-switch "-c")
+                               command)
+                :coding 'utf-8-unix
+                :connection-type 'pipe
+                :noquery t
+                :sentinel #'org-slides--demo-command-sentinel)))
+          (push buffer org-slides--demo-created-buffers)
+          (push process org-slides--demo-processes)
+          buffer)
+      (error
+       (ignore-errors (kill-buffer buffer))
+       (signal (car err) (cdr err))))))
+
+(defun org-slides--demo-open-elisp (form)
+  "Evaluate FORM for a demo and return a buffer.
+FORM may evaluate to a buffer, a demo spec string, or nil."
+  (let ((result (eval (read form) t)))
+    (cond
+     ((bufferp result) result)
+     ((stringp result) (org-slides--demo-resolve result))
+     ((null result) nil)
+     (t
+      (user-error "Demo expression returned %S; expected a buffer, string, or nil"
+                  result)))))
+
+(defun org-slides--demo-open-external (value)
+  "Open VALUE outside Emacs."
+  (if (org-slides--demo-url-p value)
+      (browse-url value)
+    (org-open-file (expand-file-name value))))
+
+(defun org-slides--demo-macro-buffer ()
+  "Return the buffer where a macro demo should run.
+Reuse the current demo buffer when one is visible; otherwise create a
+scratch buffer for the macro."
+  (let ((window (org-slides--demo-window)))
+    (if (and (window-live-p window)
+             (buffer-live-p (window-buffer window))
+             (not (eq (window-buffer window) (current-buffer))))
+        (window-buffer window)
+      (let ((buffer (generate-new-buffer "*org-slides-demo*")))
+        (with-current-buffer buffer
+          (fundamental-mode))
+        (push buffer org-slides--demo-created-buffers)
+        buffer))))
+
+(defun org-slides--demo-resolve (spec)
+  "Return a buffer for demo SPEC, or nil when it opens externally."
+  (let* ((parsed (org-slides--demo-parse-spec spec))
+         (kind (car parsed))
+         (value (cdr parsed)))
+    (pcase kind
+      ('buffer
+       (or (get-buffer value)
+           (user-error "No buffer named %s" value)))
+      ('file (org-slides--demo-open-file value))
+      ('url (org-slides--demo-open-url value))
+      ('video (org-slides--demo-open-video value))
+      ('command (org-slides--demo-open-command value))
+      ('shell (org-slides--demo-open-shell value))
+      ('macro (org-slides--demo-macro-buffer))
+      ('timed-macro (org-slides--demo-macro-buffer))
+      ('elisp (org-slides--demo-open-elisp value))
+      ('external
+       (org-slides--demo-open-external value)
+       nil)
+      ('none nil)
+      (_ (org-slides--demo-open-file spec)))))
+
+(defun org-slides--demo-display (buffer)
+  "Display BUFFER in the demo side window."
+  (unless (buffer-live-p buffer)
+    (user-error "Demo buffer is not live"))
+  (when (eq buffer (current-buffer))
+    (user-error "The presentation buffer cannot be its own demo"))
+  (let* ((presentation (current-buffer))
+         (old-window (org-slides--demo-window presentation))
+         (old-buffer (and old-window (window-buffer old-window)))
+         (alist `((display-buffer-in-side-window)
+                  (side . ,org-slides-demo-side)
+                  (slot . 0)
+                  (window-width . ,org-slides-demo-width)
+                  (preserve-size . (t . nil))
+                  (window-parameters
+                   . ((org-slides-demo . t)
+                      (org-slides-demo-presentation . ,presentation)))))
+         (window (display-buffer buffer alist)))
+    (unless (window-live-p window)
+      (user-error "Unable to display the demo buffer"))
+    (when (and old-buffer
+               (not (eq old-buffer buffer))
+               (buffer-live-p old-buffer))
+      (with-current-buffer old-buffer
+        (when org-slides-demo-mode
+          (org-slides-demo-mode -1))
+        (setq org-slides--demo-presentation-buffer nil)))
+    (set-window-parameter window 'org-slides-demo t)
+    (set-window-parameter window 'org-slides-demo-presentation presentation)
+    (setq org-slides--demo-window window
+          org-slides--demo-buffer buffer)
+    (with-current-buffer buffer
+      (setq-local org-slides--demo-presentation-buffer presentation)
+      (org-slides-demo-mode 1))
+    (force-window-update buffer)
+    window))
+
+(defun org-slides--demo-call-in-window (buffer function)
+  "Call FUNCTION in the demo window, showing BUFFER when it is live.
+Temporarily disable `org-slides-demo-mode' so recorded keys reach the
+buffer's major mode, then restore demo mode in the buffers shown by
+the demo window."
+  (let ((window (org-slides--demo-window))
+        (presentation (org-slides--demo-presentation)))
+    (unless (window-live-p window)
+      (user-error "No demo pane is visible"))
+    (let ((buffer (or (and (buffer-live-p buffer) buffer)
+                      (window-buffer window))))
+      (unless (buffer-live-p buffer)
+        (user-error "The demo buffer is not live"))
+      (unwind-protect
+          (progn
+            (when (buffer-local-value 'org-slides-demo-mode buffer)
+              (with-current-buffer buffer
+                (org-slides-demo-mode -1)))
+            (with-selected-window window
+              (when (and (buffer-live-p buffer)
+                         (not (eq (window-buffer window) buffer)))
+                (set-window-buffer window buffer))
+              (funcall function)))
+        (dolist (target (list buffer
+                              (and (window-live-p window)
+                                   (window-buffer window))))
+          (when (and (buffer-live-p target)
+                     (not (eq target presentation)))
+            (with-current-buffer target
+              (setq-local org-slides--demo-presentation-buffer presentation)
+              (org-slides-demo-mode 1))))))))
+
+(defun org-slides--demo-macro-definition (macro)
+  "Return an object `execute-kbd-macro' can run for MACRO.
+MACRO is a named keyboard macro or `register:CHAR'."
+  (let ((macro (string-trim (if (symbolp macro) (symbol-name macro) macro))))
+    (cond
+     ((string-prefix-p "register:" macro)
+      (let* ((name (substring macro (length "register:")))
+             (register (and (not (string-empty-p name))
+                            (string-to-char name))))
+        (unless register
+          (user-error "A register name is required: %s" macro))
+        (let ((value (get-register register)))
+          (unless (or (stringp value) (vectorp value))
+            (user-error "Register %c does not contain a keyboard macro"
+                        register))
+          value)))
+     ((string-empty-p macro)
+      (user-error "A macro name is required"))
+     (t
+      (let ((symbol (intern macro)))
+        (unless (fboundp symbol)
+          (user-error "No keyboard macro named %s" macro))
+        (let ((definition (symbol-function symbol)))
+          (unless (or (stringp definition)
+                      (vectorp definition)
+                      (kmacro-keyboard-macro-p symbol))
+            (user-error "%s is not a keyboard macro" macro)))
+        symbol)))))
+
+(defun org-slides--demo-cancel-macro ()
+  "Cancel a pending or active demo macro."
+  (org-slides--timed-macro-cancel-playback)
+  (when (timerp org-slides--demo-macro-timer)
+    (cancel-timer org-slides--demo-macro-timer))
+  (setq org-slides--demo-macro-timer nil))
+
+(defun org-slides--demo-play-macro (macro &optional buffer)
+  "Play keyboard macro MACRO in the demo pane.
+BUFFER defaults to the buffer currently shown there.  MACRO is a named
+keyboard macro or `register:CHAR'."
+  (let ((definition (org-slides--demo-macro-definition macro)))
+    (org-slides--demo-call-in-window
+     buffer
+     (lambda ()
+       (if (and (symbolp definition)
+                (kmacro-keyboard-macro-p definition)
+                (not (let ((function (symbol-function definition)))
+                       (or (stringp function) (vectorp function)))))
+           (call-interactively definition)
+         (execute-kbd-macro definition))))))
+
+;;; Timed keyboard macros
+
+(defun org-slides--timed-macro-p (value)
+  "Return non-nil when VALUE looks like a timed keyboard macro."
+  (and (consp value)
+       (let ((ok t))
+         (dolist (entry value ok)
+           (unless (and (consp entry)
+                        (numberp (car entry))
+                        (>= (car entry) 0)
+                        (let ((keys (cdr entry)))
+                          (or (stringp keys) (vectorp keys))))
+             (setq ok nil))))))
+
+(defun org-slides--timed-macro-duration (entries)
+  "Return the last recorded timestamp in ENTRIES."
+  (if entries
+      (car (car (last entries)))
+    0.0))
+
+(defun org-slides--timed-macro-resolve (macro)
+  "Return the entries for timed macro MACRO.
+MACRO may be a list of entries, `last', or the name of a variable
+holding the entries."
+  (cond
+   ((org-slides--timed-macro-p macro) macro)
+   ((or (stringp macro) (symbolp macro))
+    (let* ((name (string-trim (if (symbolp macro)
+                                  (symbol-name macro)
+                                macro)))
+           (symbol (intern name)))
+      (cond
+       ((string-equal (downcase name) "last")
+        (or org-slides-timed-macro-last
+            (user-error "No timed macro has been recorded")))
+       ((and (boundp symbol)
+             (org-slides--timed-macro-p (symbol-value symbol)))
+        (symbol-value symbol))
+       (t
+        (user-error "No timed macro named %s" name)))))
+   (t
+    (user-error "Invalid timed macro: %S" macro))))
+
+(defun org-slides--timed-macro-play-entries (entries &optional speed)
+  "Play timed macro ENTRIES, scaling timestamps by SPEED.
+Each entry's car is seconds since recording started.  Playback waits
+until that time relative to its own start, so slow commands do not
+shift the rest of the recording."
+  (let ((speed (if (numberp speed) (max 0 speed) 1.0))
+        (start (float-time)))
+    (dolist (entry entries)
+      (let ((wait (- (* speed (car entry))
+                     (- (float-time) start))))
+        (when (> wait 0)
+          (sleep-for wait)))
+      (execute-kbd-macro (cdr entry)))))
+
+(defun org-slides--timed-macro-finish-playback ()
+  "Finish and clean up the active timed macro playback."
+  (when org-slides--timed-macro-playback
+    (let* ((state org-slides--timed-macro-playback)
+           (timer (plist-get state :timer))
+           (demo (plist-get state :demo))
+           (window (plist-get state :window))
+           (presentation (plist-get state :presentation))
+           (return (plist-get state :return-window))
+           (original (plist-get state :original-buffer)))
+      (when (timerp timer)
+        (cancel-timer timer))
+      (setq org-slides--timed-macro-playback nil)
+      (when demo
+        (dolist (target (list original
+                              (and (window-live-p window)
+                                   (window-buffer window))))
+          (when (and (buffer-live-p target)
+                     (not (eq target presentation)))
+            (with-current-buffer target
+              (setq-local org-slides--demo-presentation-buffer presentation)
+              (org-slides-demo-mode 1)))))
+      (when (and (window-live-p return)
+                 (not (eq (selected-window) return)))
+        (select-window return)))))
+
+(defun org-slides--timed-macro-cancel-playback ()
+  "Stop the active timed macro playback."
+  (when org-slides--timed-macro-playback
+    (org-slides--timed-macro-finish-playback)))
+
+(defun org-slides--timed-macro-playback-step ()
+  "Execute the next step of the active timed macro playback."
+  (when org-slides--timed-macro-playback
+    (let* ((state org-slides--timed-macro-playback)
+           (entries (plist-get state :entries))
+           (index (plist-get state :index))
+           (start (plist-get state :start))
+           (speed (plist-get state :speed))
+           (window (plist-get state :window)))
+      (cond
+       ((>= index (length entries))
+        (org-slides--timed-macro-finish-playback))
+       ((not (window-live-p window))
+        (org-slides--timed-macro-finish-playback))
+       (t
+        (let* ((entry (nth index entries))
+               (wait (- (* speed (car entry))
+                        (- (float-time) start))))
+          (if (> wait 0)
+              (plist-put state :timer
+                         (run-at-time wait nil
+                                      #'org-slides--timed-macro-playback-step))
+            (plist-put state :index (1+ index))
+            (condition-case err
+                (progn
+                  (select-window window)
+                  (when (plist-get state :demo)
+                    (with-current-buffer (window-buffer window)
+                      (when org-slides-demo-mode
+                        (org-slides-demo-mode -1))))
+                  (execute-kbd-macro (cdr entry))
+                  (redisplay t))
+              ((error quit)
+               (message "Org Slides: timed macro stopped: %s"
+                        (if (eq (car err) 'quit)
+                            "quit"
+                          (error-message-string err)))
+               (org-slides--timed-macro-finish-playback)))
+            (when org-slides--timed-macro-playback
+              (plist-put state :timer
+                         (run-at-time 0 nil
+                                      #'org-slides--timed-macro-playback-step))))))))))
+
+(defun org-slides--timed-macro-start-playback (entries speed window
+                                                       demo presentation)
+  "Start asynchronous playback of ENTRIES in WINDOW.
+SPEED scales the recorded timestamps.  DEMO non-nil means WINDOW is a
+demo pane belonging to PRESENTATION."
+  (org-slides--timed-macro-cancel-playback)
+  (unless (window-live-p window)
+    (user-error "The target window is not live"))
+  (setq org-slides--timed-macro-playback
+        (list :entries entries
+              :index 0
+              :start (float-time)
+              :speed (if (numberp speed) (max 0 speed) 1.0)
+              :window window
+              :demo demo
+              :presentation presentation
+              :return-window (selected-window)
+              :original-buffer (window-buffer window)
+              :timer nil))
+  (if (null entries)
+      (org-slides--timed-macro-finish-playback)
+    (when demo
+      (with-current-buffer (window-buffer window)
+        (when org-slides-demo-mode
+          (org-slides-demo-mode -1))))
+    (plist-put org-slides--timed-macro-playback :timer
+               (run-at-time 0 nil
+                            #'org-slides--timed-macro-playback-step))))
+
+(defun org-slides--timed-macro-record ()
+  "Record the command that is about to run into the timed macro."
+  (when (and org-slides--timed-macro-recording
+             (not org-slides--timed-macro-playback))
+    (cond
+     ((eq this-command #'keyboard-quit)
+      (org-slides--timed-macro-cancel))
+     ((memq this-command '(org-slides-timed-macro-stop
+                           org-slides-timed-macro-toggle))
+      nil)
+     (t
+      (let ((keys (this-command-keys)))
+        (when (and (or (stringp keys) (vectorp keys))
+                   (> (length keys) 0))
+          (let ((now (float-time)))
+            (push (cons (max 0 (- now org-slides--timed-macro-start-time))
+                        keys)
+                  org-slides--timed-macro-entries))))))))
+
+(defun org-slides--timed-macro-cancel ()
+  "Cancel the current timed macro recording."
+  (remove-hook 'pre-command-hook #'org-slides--timed-macro-record)
+  (setq org-slides--timed-macro-recording nil
+        org-slides--timed-macro-entries nil
+        org-slides--timed-macro-start-time nil)
+  (message "Timed macro recording cancelled"))
+
+;;;###autoload
+(defun org-slides-timed-macro-start ()
+  "Start recording a timed keyboard macro.
+The elapsed time before each command is stored with the keys, including
+commands that use the minibuffer.  Keys consumed inside a single
+command's own loop, such as `isearch' or `query-replace', are not
+captured by this command-level recorder."
+  (interactive)
+  (when org-slides--timed-macro-recording
+    (user-error "Already recording a timed macro"))
+  (remove-hook 'pre-command-hook #'org-slides--timed-macro-record)
+  (setq org-slides--timed-macro-recording t
+        org-slides--timed-macro-entries nil
+        org-slides--timed-macro-start-time (float-time))
+  (add-hook 'pre-command-hook #'org-slides--timed-macro-record)
+  (message "Timed macro recording..."))
+
+;;;###autoload
+(defun org-slides-timed-macro-cancel ()
+  "Cancel the current timed macro recording and discard it."
+  (interactive)
+  (if org-slides--timed-macro-recording
+      (org-slides--timed-macro-cancel)
+    (user-error "No timed macro recording in progress")))
+
+(defun org-slides--timed-macro-finish ()
+  "Finish recording the current timed macro and return it."
+  (remove-hook 'pre-command-hook #'org-slides--timed-macro-record)
+  (setq org-slides--timed-macro-recording nil)
+  (setq org-slides-timed-macro-last
+        (nreverse org-slides--timed-macro-entries))
+  (setq org-slides--timed-macro-entries nil
+        org-slides--timed-macro-start-time nil)
+  org-slides-timed-macro-last)
+
+;;;###autoload
+(defun org-slides-timed-macro-stop ()
+  "Stop recording a timed keyboard macro and keep it.
+For a clean recording, invoke this from a key binding rather than
+`M-x'; otherwise the `M-x' input becomes part of the macro."
+  (interactive)
+  (unless org-slides--timed-macro-recording
+    (user-error "No timed macro recording in progress"))
+  (let ((macro (org-slides--timed-macro-finish)))
+    (message "Timed macro recorded: %d steps, %.2fs"
+             (length macro)
+             (org-slides--timed-macro-duration macro))
+    macro))
+
+;;;###autoload
+(defun org-slides-timed-macro-toggle ()
+  "Start or stop recording a timed keyboard macro."
+  (interactive)
+  (if org-slides--timed-macro-recording
+      (org-slides-timed-macro-stop)
+    (org-slides-timed-macro-start)))
+
+;;;###autoload
+(defun org-slides-timed-macro-save (name)
+  "Store the last timed macro as the variable NAME.
+After this, `timed-macro:NAME' can play it.  Use
+`org-slides-timed-macro-insert' to put a persistent form in a file."
+  (interactive (list (intern (read-string "Timed macro name: "))))
+  (when (string-empty-p (symbol-name name))
+    (user-error "A timed macro name is required"))
+  (unless org-slides-timed-macro-last
+    (user-error "No timed macro has been recorded"))
+  (set name org-slides-timed-macro-last)
+  (message "Timed macro saved as %s" name))
+
+;;;###autoload
+(defun org-slides-timed-macro-insert (name)
+  "Insert a `setq' form for the timed macro stored in NAME."
+  (interactive (list (intern (read-string "Timed macro name: "))))
+  (unless (and (boundp name)
+               (org-slides--timed-macro-p (symbol-value name)))
+    (user-error "No timed macro named %s" name))
+  (insert (format "(setq %s '%s)\n"
+                  name
+                  (pp-to-string (symbol-value name)))))
+
+;;;###autoload
+(defun org-slides-timed-macro-play (name &optional speed)
+  "Play timed macro NAME with optional SPEED multiplier.
+NAME is `last' or the name of a variable holding a timed macro.
+A prefix argument prompts for the speed."
+  (interactive
+   (list (read-string "Timed macro: "
+                      (if org-slides-timed-macro-last "last" "")
+                      'org-slides-timed-macro-history)
+         (if current-prefix-arg
+             (read-number "Speed: " org-slides-timed-macro-speed)
+           org-slides-timed-macro-speed)))
+  (let ((entries (org-slides--timed-macro-resolve name)))
+    (org-slides--timed-macro-start-playback
+     entries speed (selected-window) nil nil)))
+
+;;;###autoload
+(defun org-slides-timed-macro-stop-playback ()
+  "Stop the timed macro that is currently playing."
+  (interactive)
+  (if org-slides--timed-macro-playback
+      (org-slides--timed-macro-cancel-playback)
+    (user-error "No timed macro is playing")))
+
+(defun org-slides--demo-play-timed-macro (macro &optional buffer)
+  "Play timed macro MACRO in the demo pane."
+  (let ((entries (org-slides--timed-macro-resolve macro))
+        (window (org-slides--demo-window)))
+    (unless (window-live-p window)
+      (user-error "No demo pane is visible"))
+    (when (and (buffer-live-p buffer)
+               (not (eq (window-buffer window) buffer)))
+      (set-window-buffer window buffer))
+    (org-slides--timed-macro-start-playback
+     entries org-slides-timed-macro-speed window t
+     (org-slides--demo-presentation))))
+
+(defun org-slides--demo-run-scheduled-macro (presentation macro buffer kind)
+  "Run MACRO in BUFFER if PRESENTATION still has a demo pane.
+KIND is `timed-macro' for a timed macro, or nil for a normal one."
+  (when (and (buffer-live-p presentation)
+             (buffer-local-value 'org-slides--started presentation)
+             (org-slides--demo-window presentation))
+    (with-current-buffer presentation
+      (setq org-slides--demo-macro-timer nil)
+      (condition-case err
+          (if (eq kind 'timed-macro)
+              (org-slides--demo-play-timed-macro macro buffer)
+            (org-slides--demo-play-macro macro buffer))
+        (error
+         (message "Org Slides: demo macro failed: %s"
+                  (error-message-string err)))))))
+
+(defun org-slides--demo-schedule-macro (macro &optional buffer kind)
+  "Play MACRO in the demo pane after `org-slides-demo-macro-delay'.
+KIND is `timed-macro' for a timed macro, or nil for a normal one."
+  (org-slides--demo-cancel-macro)
+  (let ((delay (or org-slides-demo-macro-delay 0)))
+    (if (and (numberp delay) (> delay 0))
+        (setq org-slides--demo-macro-timer
+              (run-at-time delay nil
+                           #'org-slides--demo-run-scheduled-macro
+                           (current-buffer) macro buffer kind))
+      (org-slides--demo-run-scheduled-macro
+       (current-buffer) macro buffer kind))))
+
+(defun org-slides--demo-hide ()
+  "Hide the demo side window, if any."
+  (org-slides--demo-cancel-macro)
+  (let ((window (org-slides--demo-window)))
+    (when window
+      (let ((buffer (window-buffer window)))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when org-slides-demo-mode
+              (org-slides-demo-mode -1))
+            (setq org-slides--demo-presentation-buffer nil))))
+      (ignore-errors (delete-window window))
+      (setq org-slides--demo-window nil
+            org-slides--demo-buffer nil))))
+
+(defun org-slides--demo-show (spec)
+  "Show demo SPEC in the side window, or hide the pane for `none'."
+  (unless org-slides-demo-pane
+    (user-error "The org-slides demo pane is disabled"))
+  (unless (and (stringp spec)
+               (not (string-empty-p (string-trim spec))))
+    (user-error "A demo spec is required"))
+  (let* ((spec (string-trim spec))
+         (parsed (org-slides--demo-parse-spec spec))
+         (kind (car parsed))
+         (value (cdr parsed))
+         (buffer (org-slides--demo-resolve spec)))
+    (when (and (memq kind '(macro timed-macro)) (string-empty-p value))
+      (user-error "A macro name is required"))
+    (setq org-slides--demo-spec spec)
+    (if (buffer-live-p buffer)
+        (progn
+          (org-slides--demo-display buffer)
+          (when (memq kind '(macro timed-macro))
+            (org-slides--demo-schedule-macro value buffer kind)))
+      (org-slides--demo-hide))))
+
+(defun org-slides--demo-show-from-anywhere (spec)
+  "Show SPEC in the active presentation's demo pane."
+  (let ((presentation (or (org-slides--demo-presentation)
+                          (user-error "No active org-slides presentation"))))
+    (with-current-buffer presentation
+      (org-slides--demo-show spec))))
+
+(defun org-slides--demo-default-spec ()
+  "Return the spec to use when the demo is toggled on."
+  (let ((presentation (org-slides--demo-presentation)))
+    (and presentation
+         (with-current-buffer presentation
+           (or (and (stringp org-slides--demo-spec)
+                    (not (org-slides--demo-none-spec-p org-slides--demo-spec))
+                    org-slides--demo-spec)
+               (org-slides--demo-spec-for-slide))))))
+
+(defun org-slides--demo-slide-region ()
+  "Return (START . END) of the current slide."
+  (cond
+   ((and (markerp org-slides--logical-start)
+         (marker-position org-slides--logical-start)
+         (markerp org-slides--logical-end)
+         (marker-position org-slides--logical-end))
+    (cons (marker-position org-slides--logical-start)
+          (marker-position org-slides--logical-end)))
+   ((org-current-level)
+    (save-excursion
+      (org-slides-top)
+      (cons (point) (org-end-of-subtree t t))))
+   (t
+    (save-excursion
+      (goto-char (point-min))
+      (cons (point-min)
+            (if (outline-next-heading) (point) (point-max)))))))
+
+(defun org-slides--slide-keyword (key start end)
+  "Return the first #+KEY value between START and END, or nil.
+Literal #+KEY lines inside blocks are ignored."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (narrow-to-region start end)
+      (goto-char (point-min))
+      (let ((case-fold-search t)
+            (regexp (concat "^[ \t]*#\\+"
+                            (regexp-quote key)
+                            ":[ \t]*\\(.*\\)$"))
+            found)
+        (while (and (not found)
+                    (re-search-forward regexp (point-max) t))
+          (let ((value (match-string 1))
+                (element (save-match-data
+                           (save-excursion
+                             (goto-char (match-beginning 0))
+                             (org-element-at-point)))))
+            (when (and (eq (org-element-type element) 'keyword)
+                       (string= (upcase key)
+                                (upcase (or (org-element-property :key element)
+                                            ""))))
+              (setq found (string-trim value)))))
+        (and found (not (string-empty-p found)) found)))))
+
+(defun org-slides--demo-keyword-spec (start end)
+  "Return the first `#+DEMO:' spec between START and END, or nil."
+  (org-slides--slide-keyword "DEMO" start end))
+
+(defun org-slides--demo-spec-for-slide ()
+  "Return the demo spec for the current slide, or nil."
+  (let* ((property (and (org-current-level)
+                        (org-entry-get nil "DEMO")))
+         (property (and property (string-trim property)))
+         (region (org-slides--demo-slide-region))
+         (keyword (and region
+                       (org-slides--demo-keyword-spec
+                        (car region) (cdr region))))
+         (spec (or (and property (not (string-empty-p property)) property)
+                   keyword
+                   org-slides-demo-default)))
+    (and spec
+         (not (string-empty-p (string-trim spec)))
+         (string-trim spec))))
+
+(defun org-slides--demo-macro-for-slide ()
+  "Return the `DEMO-MACRO' setting for the current slide, or nil.
+A `DEMO-MACRO' property wins over a `#+DEMO-MACRO:' keyword."
+  (let* ((property (and (org-current-level)
+                        (org-entry-get nil "DEMO-MACRO")))
+         (property (and property (string-trim property)))
+         (region (org-slides--demo-slide-region))
+         (keyword (and region
+                       (org-slides--slide-keyword
+                        "DEMO-MACRO" (car region) (cdr region)))))
+    (or (and property (not (string-empty-p property)) property)
+        keyword)))
+
+(defun org-slides--demo-timed-macro-for-slide ()
+  "Return the `DEMO-TIMED-MACRO' setting for the current slide, or nil.
+A `DEMO-TIMED-MACRO' property wins over a `#+DEMO-TIMED-MACRO:' keyword."
+  (let* ((property (and (org-current-level)
+                        (org-entry-get nil "DEMO-TIMED-MACRO")))
+         (property (and property (string-trim property)))
+         (region (org-slides--demo-slide-region))
+         (keyword (and region
+                       (org-slides--slide-keyword
+                        "DEMO-TIMED-MACRO" (car region) (cdr region)))))
+    (or (and property (not (string-empty-p property)) property)
+        keyword)))
+
+(defun org-slides--demo-schedule-macros (macro timed)
+  "Schedule the current slide's normal MACRO and TIMED macro."
+  (when (org-slides--demo-window)
+    (when macro
+      (org-slides--demo-schedule-macro macro nil nil))
+    (when timed
+      (org-slides--demo-schedule-macro timed nil 'timed-macro))))
+
+(defun org-slides--update-demo ()
+  "Show, hide, or switch the demo pane for the current slide.
+Also play the slide's `DEMO-MACRO' or `DEMO-TIMED-MACRO' after the
+demo buffer is ready."
+  (when (and org-slides-demo-pane org-slides--started)
+    (org-slides--demo-cancel-macro)
+    (let ((spec (org-slides--demo-spec-for-slide))
+          (macro (org-slides--demo-macro-for-slide))
+          (timed (org-slides--demo-timed-macro-for-slide)))
+      (setq org-slides--demo-macro macro
+            org-slides--demo-timed-macro timed)
+      (cond
+       ((null spec)
+        (if org-slides-demo-keep
+            (org-slides--demo-schedule-macros macro timed)
+          (org-slides--demo-hide)
+          (setq org-slides--demo-spec nil)))
+       ((org-slides--demo-none-spec-p spec)
+        (org-slides--demo-hide)
+        (setq org-slides--demo-spec 'none))
+       ((not (equal spec org-slides--demo-spec))
+        (org-slides--demo-show spec)
+        (org-slides--demo-schedule-macros macro timed))
+       (t
+        (org-slides--demo-schedule-macros macro timed))))))
+
+(defun org-slides--demo-reset ()
+  "Close the demo pane and discard resources created for it."
+  (org-slides--demo-hide)
+  (dolist (process org-slides--demo-processes)
+    (when (and (processp process) (process-live-p process))
+      (ignore-errors (delete-process process))))
+  (when org-slides-demo-kill-buffers
+    (dolist (buffer org-slides--demo-created-buffers)
+      (when (buffer-live-p buffer)
+        (let ((process (get-buffer-process buffer)))
+          (when (and (processp process) (process-live-p process))
+            (ignore-errors (delete-process process))))
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (ignore-errors (kill-buffer buffer)))))
+  (dolist (file org-slides--demo-temp-files)
+    (when (file-exists-p file)
+      (ignore-errors (delete-file file))))
+  (setq org-slides--demo-processes nil
+        org-slides--demo-created-buffers nil
+        org-slides--demo-temp-files nil
+        org-slides--demo-window nil
+        org-slides--demo-buffer nil
+        org-slides--demo-spec nil
+        org-slides--demo-macro nil
+        org-slides--demo-timed-macro nil
+        org-slides--demo-macro-timer nil))
+
+;;;###autoload
+(defun org-slides-demo-show (spec)
+  "Show demo SPEC in a side window beside the presentation.
+SPEC is one of:
+
+  buffer:NAME     show an existing Emacs buffer
+  file:PATH       visit a file (video files are played)
+  url:URL         open a page in xwidget-webkit or EWW
+  video:PATH-URL  play a video in xwidget-webkit or externally
+  command:CMD     run a shell command and show its output
+  shell:NAME      start or reuse an interactive shell (NAME optional)
+  macro:NAME      play keyboard macro NAME in the demo pane
+  timed-macro:NAME play a timed keyboard macro in the demo pane
+  elisp:FORM      evaluate FORM; it must yield a buffer or spec
+  external:PATH   open a file or URL outside Emacs
+  none            hide the demo pane
+
+A bare path is treated as `file:' and a bare URL as `url:'.  MACRO is
+a named keyboard macro or `register:CHAR'.  A slide's `DEMO-MACRO' or
+`DEMO-TIMED-MACRO' setting plays a macro after its `DEMO' buffer is
+shown.  When called interactively, the current slide's spec is offered
+as the default."
+  (interactive
+   (list (read-string "Demo spec: "
+                      (org-slides--demo-default-spec)
+                      'org-slides-demo-history)))
+  (org-slides--demo-show-from-anywhere spec))
+
+;;;###autoload
+(defun org-slides-demo-hide ()
+  "Hide the demo pane without discarding its spec."
+  (interactive)
+  (let ((presentation (org-slides--demo-presentation)))
+    (when presentation
+      (with-current-buffer presentation
+        (org-slides--demo-hide)))))
+
+;;;###autoload
+(defun org-slides-demo-toggle ()
+  "Show or hide the demo pane for the current slide."
+  (interactive)
+  (let ((presentation (or (org-slides--demo-presentation)
+                          (user-error "No active org-slides presentation"))))
+    (with-current-buffer presentation
+      (if (org-slides--demo-window)
+          (org-slides--demo-hide)
+        (let ((spec (org-slides--demo-default-spec)))
+          (if (and spec (not (org-slides--demo-none-spec-p spec)))
+              (org-slides--demo-show spec)
+            (call-interactively #'org-slides-demo-show)))))))
+
+(defun org-slides--demo-macro-default ()
+  "Return the default macro name for `org-slides-demo-play-macro'."
+  (or org-slides--demo-macro
+      (let ((parsed (ignore-errors
+                      (org-slides--demo-parse-spec org-slides--demo-spec))))
+        (and (eq (car parsed) 'macro) (cdr parsed)))
+      (and (boundp 'last-kbd-macro)
+           (symbolp last-kbd-macro)
+           (kmacro-keyboard-macro-p last-kbd-macro)
+           (symbol-name last-kbd-macro))))
+
+;;;###autoload
+(defun org-slides-demo-play-macro (macro)
+  "Play keyboard macro MACRO in the demo pane.
+MACRO is a named keyboard macro or `register:CHAR'.  When called
+interactively, the current slide's `DEMO-MACRO' or `macro:' spec is
+offered as the default.  If the pane is hidden, the slide's demo is
+shown first, or a scratch buffer is used when the slide has none."
+  (interactive
+   (list (read-string "Demo macro: "
+                      (org-slides--demo-macro-default)
+                      'org-slides-demo-macro-history)))
+  (let ((macro (string-trim (if (symbolp macro)
+                                (symbol-name macro)
+                              macro))))
+    (when (string-empty-p macro)
+      (user-error "A macro name is required"))
+    (let ((presentation (or (org-slides--demo-presentation)
+                            (user-error "No active org-slides presentation"))))
+      (with-current-buffer presentation
+        (setq org-slides--demo-macro macro)
+        (org-slides--demo-cancel-macro)
+        (if (org-slides--demo-window)
+            (org-slides--demo-play-macro macro)
+          (let ((spec (or (and (stringp org-slides--demo-spec)
+                               (not (org-slides--demo-none-spec-p
+                                     org-slides--demo-spec))
+                               org-slides--demo-spec)
+                          (org-slides--demo-spec-for-slide))))
+            (if (and spec (not (org-slides--demo-none-spec-p spec)))
+                (progn
+                  (org-slides--demo-show spec)
+                  (org-slides--demo-cancel-macro)
+                  (if (org-slides--demo-window)
+                      (org-slides--demo-play-macro macro)
+                    (org-slides--demo-show (concat "macro:" macro))))
+              (org-slides--demo-show (concat "macro:" macro)))))))))
+
+(defun org-slides--demo-timed-macro-default ()
+  "Return the default timed macro name for replay."
+  (or org-slides--demo-timed-macro
+      (let ((parsed (ignore-errors
+                      (org-slides--demo-parse-spec org-slides--demo-spec))))
+        (and (eq (car parsed) 'timed-macro) (cdr parsed)))
+      (and org-slides-timed-macro-last "last")))
+
+;;;###autoload
+(defun org-slides-demo-play-timed-macro (macro)
+  "Play timed macro MACRO in the demo pane.
+When called interactively, the current slide's timed macro is offered
+as the default.  If the pane is hidden, the slide's demo is shown first."
+  (interactive
+   (list (read-string "Timed demo macro: "
+                      (org-slides--demo-timed-macro-default)
+                      'org-slides-timed-macro-history)))
+  (let ((macro (string-trim (if (symbolp macro)
+                                (symbol-name macro)
+                              macro))))
+    (when (string-empty-p macro)
+      (user-error "A timed macro name is required"))
+    (let ((presentation (or (org-slides--demo-presentation)
+                            (user-error "No active org-slides presentation"))))
+      (with-current-buffer presentation
+        (setq org-slides--demo-timed-macro macro)
+        (org-slides--demo-cancel-macro)
+        (if (org-slides--demo-window)
+            (org-slides--demo-play-timed-macro macro)
+          (let ((spec (or (and (stringp org-slides--demo-spec)
+                               (not (org-slides--demo-none-spec-p
+                                     org-slides--demo-spec))
+                               org-slides--demo-spec)
+                          (org-slides--demo-spec-for-slide))))
+            (if (and spec (not (org-slides--demo-none-spec-p spec)))
+                (progn
+                  (org-slides--demo-show spec)
+                  (org-slides--demo-cancel-macro)
+                  (if (org-slides--demo-window)
+                      (org-slides--demo-play-timed-macro macro)
+                    (org-slides--demo-show (concat "timed-macro:" macro))))
+              (org-slides--demo-show (concat "timed-macro:" macro)))))))))
+
+;;;###autoload
+(defun org-slides-demo-select ()
+  "Select the demo window, or return to the presentation from it."
+  (interactive)
+  (let* ((presentation (or (org-slides--demo-presentation)
+                           (user-error "No active org-slides presentation")))
+         (presentation-window (get-buffer-window presentation t))
+         (demo (org-slides--demo-window presentation)))
+    (cond
+     ((null demo)
+      (user-error "No demo pane is visible"))
+     ((eq (selected-window) demo)
+      (if (window-live-p presentation-window)
+          (select-window presentation-window)
+        (user-error "The presentation buffer is not displayed")))
+     (t
+      (select-window demo)))))
+
+(defun org-slides--demo-call-in-presentation (function)
+  "Call FUNCTION with the presentation window selected.
+Return to the demo window when the caller started there and it still
+exists."
+  (let* ((presentation (or (org-slides--demo-presentation)
+                           (user-error "No active org-slides presentation")))
+         (window (get-buffer-window presentation t))
+         (selected (selected-window))
+         (started-in-demo (eq selected
+                              (org-slides--demo-window presentation))))
+    (unless (window-live-p window)
+      (user-error "The presentation buffer is not displayed"))
+    (save-selected-window
+      (select-window window)
+      (with-current-buffer presentation
+        (funcall function)))
+    (when started-in-demo
+      (let ((new-demo (org-slides--demo-window presentation)))
+        (cond
+         ((window-live-p new-demo)
+          (select-window new-demo))
+         ((window-live-p selected)
+          (select-window selected)))))))
+
+;;;###autoload
+(defun org-slides-demo-next ()
+  "Advance the presentation while keeping focus in the demo window."
+  (interactive)
+  (org-slides--demo-call-in-presentation #'org-slides-next))
+
+;;;###autoload
+(defun org-slides-demo-prev ()
+  "Go back in the presentation while keeping focus in the demo window."
+  (interactive)
+  (org-slides--demo-call-in-presentation #'org-slides-prev))
+
+;;;###autoload
+(defun org-slides-demo-quit ()
+  "Quit the presentation from the demo window."
+  (interactive)
+  (let* ((presentation (or (org-slides--demo-presentation)
+                           (user-error "No active org-slides presentation")))
+         (window (get-buffer-window presentation t)))
+    (when (window-live-p window)
+      (select-window window))
+    (with-current-buffer presentation
+      (org-slides-quit))))
+
+(defun org-slides-demo-toggle-or-self-insert (&optional arg)
+  "Show or hide the demo pane, or insert the typed character.
+See `org-slides-next-or-self-insert' for ARG."
+  (interactive "p")
+  (if buffer-read-only
+      (org-slides-demo-toggle)
+    (self-insert-command (or arg 1))))
+
+(defun org-slides-demo-play-macro-or-self-insert (&optional arg)
+  "Replay the current demo macro, or insert the typed character.
+Prompt for a macro when the slide has no default.  See
+`org-slides-next-or-self-insert' for ARG."
+  (interactive "p")
+  (if buffer-read-only
+      (let ((macro (org-slides--demo-macro-default)))
+        (if macro
+            (org-slides-demo-play-macro macro)
+          (call-interactively #'org-slides-demo-play-macro)))
+    (self-insert-command (or arg 1))))
 
 (defun org-slides-step-forward ()
   "Reveal the next list item, then advance a page or slide."
