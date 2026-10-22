@@ -9,6 +9,37 @@ Each top-level heading is one slide; the text before the first heading is the ti
 
 * Features
 
+#+NAME: poop
+#+BEGIN_SRC emacs-lisp :exports none :results silent
+;; Recorded by org-slides; timestamps are seconds from start.
+(list
+  (cons 2.8318207263946533 "\274")
+  (cons 3.4530694484710693 "")
+  (cons 3.802321195602417 "")
+  (cons 3.827690362930298 "")
+  (cons 3.853499412536621 "")
+  (cons 3.878019094467163 "")
+  (cons 3.9034957885742188 "")
+  (cons 3.9278769493103027 "")
+  (cons 3.9533307552337646 "")
+  (cons 3.9780702590942383 "")
+  (cons 4.003326416015625 "")
+  (cons 4.027999639511108 "")
+  (cons 4.053826093673706 "")
+  (cons 4.078586101531982 "")
+  (cons 4.103373765945435 "")
+  (cons 4.128570079803467 "")
+  (cons 4.413895130157471 "\352")
+  (cons 4.728032112121582 "\352")
+  (cons 5.458030939102173 "\352")
+  (cons 5.648388624191284 "j")
+  (cons 5.979308843612671 "")
+  (cons 6.706244230270386 [67108911])
+  (cons 7.461103439331055 "")
+  (cons 7.6363677978515625 "")
+  (cons 7.796079158782959 ""))
+#+END_SRC
+
 #+DEMO: file:/home/jdyer/.emacs.d/offline-packages/local-packages/org-slides/CHANGELOG.org
 #+DEMO-TIMED-MACRO: poop
 
@@ -21,6 +52,7 @@ Each top-level heading is one slide; the text before the first heading is the ti
 - Org list items can be stepped through one at a time: unrevealed items use the `org-slides-bullet-shadow' face, =SPC= or =f= reveals the next item, and =S-SPC= (or =b=/=S-TAB=/=Backspace=) puts the previous item back into shadow.  Nested list items are stepped individually.
 - Experimental split-page mode (=org-slides-page-style= set to =split=) narrows to one computed page at a time, shows only that page's content, and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window, prefer to start at a nested heading, and can be recomputed after a resize or text-scale change.
 - A demonstration pane can run beside the presentation.  A slide can name a demo with a =DEMO= property or a =#+DEMO:= line; the pane shows an Emacs buffer, file, URL, video, shell command, interactive shell, keyboard macro, timed keyboard macro, or the result of an Emacs Lisp expression.  =DEMO-MACRO= and =DEMO-TIMED-MACRO= replay recorded steps after the demo buffer opens.  =d= toggles the pane and =C-c C-o= moves focus between the slide and the demo.
+- Macro definitions can live in named Emacs Lisp source blocks in the presentation file.  A block marked =:exports none= stays out of exports and is hidden during the presentation by default.
 - The text scale in use before the presentation is restored on quit.
 - Overlay and cursor state is buffer-local, so multiple presentations do not clobber each other.
 - Optional one-page view with =C-c C-1=; this disables automatic paging and shows the whole buffer.
@@ -74,23 +106,23 @@ Each tall slide is then split into pages that fit the window.  Only the current 
 A slide can run a demonstration in a side window.  Put a =DEMO= property in the slide, or a =#+DEMO:= line anywhere in the slide body:
 
 #+begin_src org
-,* Live demo
+* Live demo
 #+DEMO: buffer:*Python*
 
-,* Video demo
+* Video demo
 #+DEMO: video:~/videos/demo.mp4
 
-,* Shell demo
+* Shell demo
 #+DEMO: shell:
 
-,* Command demo
+* Command demo
 #+DEMO: command:python3 demo.py
 
-,* Recorded demo
+* Recorded demo
 #+DEMO: shell:
 #+DEMO-MACRO: my-shell-demo
 
-,* Self-playing macro
+* Self-playing macro
 #+DEMO: macro:my-demo
 #+end_src
 
@@ -130,7 +162,7 @@ With =video:=, =auto= uses an xwidget web view inside the side window when Emacs
 A demo can replay a keyboard macro.  The simplest form runs the macro in the side pane; if a demo buffer is already visible it is used, otherwise a scratch buffer is created:
 
 #+begin_src org
-,* Self-playing macro
+* Self-playing macro
 #+DEMO: macro:my-demo
 #+end_src
 
@@ -174,7 +206,7 @@ Perform the steps you want to demonstrate, then stop with:
 M-x org-slides-timed-macro-stop
 #+end_src
 
-Inside a presentation or demo buffer, =C-c C-t= toggles timed recording.  It is best to bind =org-slides-timed-macro-toggle= to a key and start/stop with that key.  If you stop with =M-x org-slides-timed-macro-stop=, the =M-x= input itself becomes part of the recording.  Pressing =C-g= cancels and discards the recording in progress.
+Inside a presentation or demo buffer, =C-c C-t= toggles timed recording.  It is best to bind =org-slides-timed-macro-toggle= to a key and start/stop with that key.  If you stop with =M-x org-slides-timed-macro-stop=, the =M-x= input itself becomes part of the recording.  Finish recording before saving the macro or inserting its block; otherwise those commands become part of the macro too.  Org-slides refuses to save or insert a timed macro while a recording is active.  Pressing =C-g= cancels and discards the recording in progress.
 
 The most recent recording is in =org-slides-timed-macro-last=.  Save it as a named variable with:
 
@@ -191,17 +223,76 @@ M-x org-slides-timed-macro-insert RET my-timed-demo RET
 Use the named macro in a slide:
 
 #+begin_src org
-,* Timed demo
+* Timed demo
 #+DEMO: timed-macro:my-timed-demo
 
-,* Timed shell demo
+* Timed shell demo
 #+DEMO: shell:
 #+DEMO-TIMED-MACRO: my-timed-demo
 #+end_src
 
-=timed-macro:last= plays the most recent recording in the current session.  Playback uses the recorded delays; set =org-slides-timed-macro-speed= to a value other than 1.0 to speed up or slow down all delays.  A prefix argument to =M-x org-slides-timed-macro-play= prompts for a speed.  Playback is asynchronous: each step runs from a timer and the display is refreshed between steps, so the demo pane remains visible and Emacs is not blocked for the whole recording.  Stop it with =M-x org-slides-timed-macro-stop-playback=, by hiding the demo pane, or by changing slides.
+=timed-macro:last= plays the most recent recording in the current session.  Playback uses the recorded delays; set =org-slides-timed-macro-speed= to a value other than 1.0 to speed up or slow down all delays.  A prefix argument to =M-x org-slides-timed-macro-play= prompts for a speed.  Playback is asynchronous: each step runs from a timer and the display is refreshed between steps, so the demo pane remains visible and Emacs is not blocked for the whole recording.  Focus returns to the presentation between steps, so you can keep pressing =SPC= to reveal bullets while the demo runs; moving to another slide stops the playback.  Stop it with =M-x org-slides-timed-macro-stop-playback= or by hiding the demo pane.
 
 The recorder timestamps each command with =pre-command-hook= and =this-command-keys=.  It captures normal typing and minibuffer input, but not keys consumed inside a single command's own loop (for example while =isearch= or =query-replace= is active).  Mouse events may also replay unpredictably.
+
+** Storing macro definitions in the Org file
+
+A macro can live in a named Emacs Lisp source block in the presentation file, so the definition travels with the slides.  For a timed macro, the block should return a list of =(TIMESTAMP . KEYS)= entries:
+
+#+begin_src org
+#+NAME: changelog-scroll
+#+BEGIN_SRC emacs-lisp :exports none :results silent
+(list (cons 0.20 (kbd "C-v"))
+      (cons 0.80 (kbd "C-v"))
+      (cons 1.60 (kbd "M-v")))
+#+END_SRC
+
+* Changelog scroll
+#+DEMO: file:/home/jdyer/.emacs.d/offline-packages/local-packages/org-slides/CHANGELOG.org
+#+DEMO-TIMED-MACRO: changelog-scroll
+#+end_src
+
+The block name must match the name used after =timed-macro:= or in =DEMO-TIMED-MACRO=.  Org-slides evaluates the block when it needs the macro.  A block takes precedence over a variable of the same name, so the Org file remains the source of truth while you edit it.
+
+For a normal keyboard macro, paste the output of =M-x insert-kbd-macro= into a block with the same name as the macro:
+
+#+begin_src org
+#+NAME: my-demo
+#+BEGIN_SRC emacs-lisp :exports none :results silent
+;; Paste the exact output of M-x insert-kbd-macro RET my-demo RET here.
+(defalias 'my-demo (kmacro "h i"))
+#+END_SRC
+
+* Demo
+#+DEMO: file:~/demos/example.py
+#+DEMO-MACRO: my-demo
+#+end_src
+
+To create the timed block automatically, put point where you want it and run:
+
+#+begin_src org
+M-x org-slides-timed-macro-insert-block RET changelog-scroll RET
+#+end_src
+
+For a named keyboard macro, use:
+
+#+begin_src org
+M-x org-slides-keyboard-macro-insert-block RET my-demo RET
+#+end_src
+
+Both commands insert a =#+NAME:= block with =:exports none= and =:results silent=.  The timed version writes the key events as vectors such as =[22]=; you can edit them to =(kbd "C-v")= for readability if you prefer.  The keyboard version inserts the exact output of =insert-kbd-macro=.
+
+The standard-macro block is evaluated when the macro is not already defined.  If you edit the block after the macro has been defined in the same Emacs session, use a new name or evaluate =(fmakunbound 'my-demo)= first.  For timed macros, the block is re-evaluated whenever the macro is resolved.
+
+Use these header arguments:
+
+- =:exports none= keeps the definition out of exported documents.
+- =:results silent= keeps evaluation from inserting a result into the Org file.  Org-slides also forces silent results when it evaluates the block.
+- =org-slides-hide-noexport-src= is on by default and hides =:exports none= source blocks during the presentation, so the definition does not appear on a slide.  Set it to =nil= if you want such blocks visible while presenting.
+
+Only =emacs-lisp= blocks can be used as macro definitions.  Org-slides evaluates them with Babel confirmation disabled, so only present Org files you trust.
+
+The block can be anywhere in the file, including before the first heading.  It does not need to be on the slide that uses the macro.
 
 The demo buffer gets its own =org-slides-demo-mode=, so you can drive the presentation without leaving it:
 
@@ -259,6 +350,7 @@ Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC= can 
 (setq org-slides-read-only-on-start t)
 (setq org-slides-hide-cursor-on-start t)
 (setq org-slides-hide-stars-in-headings t)
+(setq org-slides-hide-noexport-src t)   ; hide :exports none blocks
 (setq org-slides-startup-folded nil)    ; fold each slide on navigation
 (setq org-slides-auto-page t)           ; page tall slides in one window
 (setq org-slides-page-style 'scroll)    ; or 'split (experimental)

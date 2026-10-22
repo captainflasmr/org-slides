@@ -806,6 +806,92 @@ Text two.
         (should-error (org-slides--timed-macro-resolve "missing")))
     (makunbound 'org-slides-test-timed)))
 
+(ert-deftest org-slides-test-timed-macro-from-block ()
+  "A named Emacs Lisp block can define a timed macro."
+  (let ((org-slides-timed-macro-speed 0))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+NAME: org-slides-test-block-timed\n"
+              "#+BEGIN_SRC emacs-lisp :exports none :results silent\n"
+              "(list (cons 0.01 \"a\") (cons 0.02 \"b\"))\n"
+              "#+END_SRC\n\n"
+              "* One\n\n#+DEMO: timed-macro:org-slides-test-block-timed\n\n")
+      (goto-char (point-min))
+      (org-slides-start)
+      (org-slides-end)
+      (org-slides-test--wait-for-timed-playback)
+      (unwind-protect
+          (let ((buffer (window-buffer (org-slides--demo-window))))
+            (with-current-buffer buffer
+              (should (equal (buffer-string) "ab"))))
+        (org-slides-quit)))))
+
+(ert-deftest org-slides-test-demo-macro-from-block ()
+  "A named block can define a standard keyboard macro."
+  (unwind-protect
+      (with-temp-buffer
+        (org-mode)
+        (insert "#+NAME: org-slides-test-block-macro\n"
+                "#+BEGIN_SRC emacs-lisp :exports none :results silent\n"
+                "(defalias 'org-slides-test-block-macro (kmacro \"h i\"))\n"
+                "#+END_SRC\n\n"
+                "* One\n\n#+DEMO: macro:org-slides-test-block-macro\n\n")
+        (goto-char (point-min))
+        (org-slides-start)
+        (org-slides-end)
+        (unwind-protect
+            (let ((buffer (window-buffer (org-slides--demo-window))))
+              (with-current-buffer buffer
+                (should (equal (buffer-string) "hi"))))
+          (org-slides-quit)))
+    (fmakunbound 'org-slides-test-block-macro)))
+
+(ert-deftest org-slides-test-timed-macro-insert-block ()
+  "The last timed macro can be inserted as an Org source block."
+  (let ((org-slides-timed-macro-last '((0.1 . [22]) (0.5 . "a"))))
+    (with-temp-buffer
+      (org-mode)
+      (org-slides-timed-macro-insert-block "my-timed")
+      (should (string-match-p "^#\\+NAME: my-timed$" (buffer-string)))
+      (should (string-match-p ":exports none" (buffer-string)))
+      (should (string-match-p "(cons 0.1 \\[22\\])" (buffer-string)))
+      (should (string-match-p "(cons 0.5 \"a\")" (buffer-string))))))
+
+(ert-deftest org-slides-test-keyboard-macro-insert-block ()
+  "A named keyboard macro can be inserted as an Org source block."
+  (let ((last-kbd-macro (string-to-vector "hi")))
+    (kmacro-name-last-macro 'org-slides-test-block-macro)
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (org-slides-keyboard-macro-insert-block
+           "org-slides-test-block-macro")
+          (should (string-match-p
+                   "^#\\+NAME: org-slides-test-block-macro$"
+                   (buffer-string)))
+          (should (string-match-p "defalias" (buffer-string)))
+          (should (string-match-p ":exports none" (buffer-string))))
+      (fmakunbound 'org-slides-test-block-macro))))
+
+(ert-deftest org-slides-test-hide-noexport-src ()
+  "Source blocks marked :exports none are hidden in the presentation."
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+BEGIN_SRC emacs-lisp :exports none\n(hidden)\n#+END_SRC\n\n"
+            "#+BEGIN_SRC emacs-lisp\n(visible)\n#+END_SRC\n")
+    (org-slides--add-overlays)
+    (unwind-protect
+        (progn
+          (goto-char (point-min))
+          (search-forward "(hidden)")
+          (should (org-slides-test--overlay-covering
+                   (line-beginning-position)))
+          (goto-char (point-min))
+          (search-forward "(visible)")
+          (should-not (org-slides-test--overlay-covering
+                       (line-beginning-position))))
+      (org-slides--rm-overlays))))
+
 (ert-deftest org-slides-test-demo-command-output ()
   "A command demo runs asynchronously and collects its output."
   (let* ((buffer (org-slides--demo-open-command "printf demo-output"))

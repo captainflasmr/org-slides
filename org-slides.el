@@ -67,6 +67,7 @@
 
 (require 'org)
 (require 'org-element)
+(require 'ob-core)
 (require 'kmacro)
 (require 'subr-x)
 (require 'url-util)
@@ -106,6 +107,13 @@ Set `org-slides-scale-on-start' to nil to leave the current scale alone."
 
 (defcustom org-slides-hide-stars-in-headings t
   "Whether to hide the leading stars in headings while presenting."
+  :type 'boolean
+  :group 'org-slides)
+
+(defcustom org-slides-hide-noexport-src t
+  "Whether to hide source blocks marked `:exports none' while presenting.
+Such blocks are usually setup or macro definitions rather than slide
+content.  Set this to nil to show them on slides anyway."
   :type 'boolean
   :group 'org-slides)
 
@@ -1203,6 +1211,25 @@ example block visible."
       (goto-char (point-min))
       (while (re-search-forward "^\\(\\*+\\)" nil t)
         (org-slides--add-overlay (match-beginning 1) (match-end 1))))
+    ;; Hide source blocks excluded from export.  These are usually setup
+    ;; or macro definitions rather than slide content.
+    (when org-slides-hide-noexport-src
+      (save-restriction
+        (widen)
+        (org-element-map (org-element-parse-buffer) 'src-block
+          (lambda (block)
+            (let ((parameters (or (org-element-property :parameters block)
+                                  "")))
+              (when (let ((case-fold-search t))
+                      (string-match-p ":exports[ \t]+none\\b" parameters))
+                (let ((begin (org-element-property :begin block))
+                      (end (org-element-property :end block)))
+                  (when (and begin end)
+                    (when (and (< end (point-max))
+                               (eq (char-after end) ?\n))
+                      (setq end (1+ end)))
+                    (org-slides--add-overlay begin end)))))
+            nil))))
     ;; Hide emphasis and verbatim markers unless Org already does so.
     (unless org-hide-emphasis-markers
       (when (boundp 'org-emph-re)
@@ -1747,6 +1774,9 @@ MACRO is a named keyboard macro or `register:CHAR'."
      (t
       (let ((symbol (intern macro)))
         (unless (fboundp symbol)
+          ;; A named source block can define the macro with `fset'.
+          (org-slides--named-block-value macro))
+        (unless (fboundp symbol)
           (user-error "No keyboard macro named %s" macro))
         (let ((definition (symbol-function symbol)))
           (unless (or (stringp definition)
@@ -1791,6 +1821,28 @@ keyboard macro or `register:CHAR'."
                           (or (stringp keys) (vectorp keys))))
              (setq ok nil))))))
 
+(defun org-slides--named-block-value (name)
+  "Evaluate the named Emacs Lisp source block NAME and return its value.
+Return nil when the current buffer has no such block.  The block is
+evaluated with `org-confirm-babel-evaluate' nil and with silent results,
+so evaluation does not modify the buffer."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (let ((position (org-babel-find-named-block name)))
+        (when position
+          (goto-char position)
+          (let* ((info (org-babel-get-src-block-info))
+                 (language (car info)))
+            (unless (string= language "emacs-lisp")
+              (user-error "Macro block %s must be emacs-lisp, not %s"
+                          name language))
+            (let ((org-confirm-babel-evaluate nil)
+                  (inhibit-message t))
+              (org-babel-execute-src-block
+               nil info '((:results . "silent"))))))))))
+
 (defun org-slides--timed-macro-duration (entries)
   "Return the last recorded timestamp in ENTRIES."
   (if entries
@@ -1812,11 +1864,17 @@ holding the entries."
        ((string-equal (downcase name) "last")
         (or org-slides-timed-macro-last
             (user-error "No timed macro has been recorded")))
-       ((and (boundp symbol)
-             (org-slides--timed-macro-p (symbol-value symbol)))
-        (symbol-value symbol))
        (t
-        (user-error "No timed macro named %s" name)))))
+        (let ((value (org-slides--named-block-value name)))
+          (cond
+           ((org-slides--timed-macro-p value) value)
+           (value
+            (user-error "Block %s did not return a timed macro" name))
+           ((and (boundp symbol)
+                 (org-slides--timed-macro-p (symbol-value symbol)))
+            (symbol-value symbol))
+           (t
+            (user-error "No timed macro named %s" name))))))))
    (t
     (user-error "Invalid timed macro: %S" macro))))
 
@@ -1889,8 +1947,7 @@ shift the rest of the recording."
                                       #'org-slides--timed-macro-playback-step))
             (plist-put state :index (1+ index))
             (condition-case err
-                (progn
-                  (select-window window)
+                (with-selected-window window
                   (when (plist-get state :demo)
                     (with-current-buffer (window-buffer window)
                       (when org-slides-demo-mode
@@ -1916,26 +1973,36 @@ demo pane belonging to PRESENTATION."
   (org-slides--timed-macro-cancel-playback)
   (unless (window-live-p window)
     (user-error "The target window is not live"))
-  (setq org-slides--timed-macro-playback
-        (list :entries entries
-              :index 0
-              :start (float-time)
-              :speed (if (numberp speed) (max 0 speed) 1.0)
-              :window window
-              :demo demo
-              :presentation presentation
-              :return-window (selected-window)
-              :original-buffer (window-buffer window)
-              :timer nil))
-  (if (null entries)
-      (org-slides--timed-macro-finish-playback)
-    (when demo
-      (with-current-buffer (window-buffer window)
-        (when org-slides-demo-mode
-          (org-slides-demo-mode -1))))
-    (plist-put org-slides--timed-macro-playback :timer
-               (run-at-time 0 nil
-                            #'org-slides--timed-macro-playback-step))))
+  (let ((return-window (if (and demo presentation)
+                           (or (get-buffer-window presentation t)
+                               (selected-window))
+                         (selected-window))))
+    (setq org-slides--timed-macro-playback
+          (list :entries entries
+                :index 0
+                :start (float-time)
+                :speed (if (numberp speed) (max 0 speed) 1.0)
+                :window window
+                :demo demo
+                :presentation presentation
+                :return-window return-window
+                :original-buffer (window-buffer window)
+                :timer nil))
+    ;; Keep the presentation selected between steps so the presenter can
+    ;; reveal bullets or change slides while the demo runs.
+    (when (and demo
+               (window-live-p return-window)
+               (not (eq (selected-window) return-window)))
+      (select-window return-window))
+    (if (null entries)
+        (org-slides--timed-macro-finish-playback)
+      (when demo
+        (with-current-buffer (window-buffer window)
+          (when org-slides-demo-mode
+            (org-slides-demo-mode -1))))
+      (plist-put org-slides--timed-macro-playback :timer
+                 (run-at-time 0 nil
+                              #'org-slides--timed-macro-playback-step)))))
 
 (defun org-slides--timed-macro-record ()
   "Record the command that is about to run into the timed macro."
@@ -1989,6 +2056,11 @@ captured by this command-level recorder."
       (org-slides--timed-macro-cancel)
     (user-error "No timed macro recording in progress")))
 
+(defun org-slides--timed-macro-check-not-recording ()
+  "Signal an error when a timed macro is being recorded."
+  (when org-slides--timed-macro-recording
+    (user-error "Stop the timed macro recording first")))
+
 (defun org-slides--timed-macro-finish ()
   "Finish recording the current timed macro and return it."
   (remove-hook 'pre-command-hook #'org-slides--timed-macro-record)
@@ -2027,6 +2099,7 @@ For a clean recording, invoke this from a key binding rather than
 After this, `timed-macro:NAME' can play it.  Use
 `org-slides-timed-macro-insert' to put a persistent form in a file."
   (interactive (list (intern (read-string "Timed macro name: "))))
+  (org-slides--timed-macro-check-not-recording)
   (when (string-empty-p (symbol-name name))
     (user-error "A timed macro name is required"))
   (unless org-slides-timed-macro-last
@@ -2038,12 +2111,63 @@ After this, `timed-macro:NAME' can play it.  Use
 (defun org-slides-timed-macro-insert (name)
   "Insert a `setq' form for the timed macro stored in NAME."
   (interactive (list (intern (read-string "Timed macro name: "))))
+  (org-slides--timed-macro-check-not-recording)
   (unless (and (boundp name)
                (org-slides--timed-macro-p (symbol-value name)))
     (user-error "No timed macro named %s" name))
   (insert (format "(setq %s '%s)\n"
                   name
                   (pp-to-string (symbol-value name)))))
+
+;;;###autoload
+(defun org-slides-timed-macro-insert-block (name)
+  "Insert a named Org source block for the last timed macro.
+NAME is used for both the block name and the `timed-macro:' reference.
+The block is marked `:exports none' and `:results silent'."
+  (interactive (list (read-string "Timed macro block name: "
+                                  "my-timed-demo")))
+  (org-slides--timed-macro-check-not-recording)
+  (unless org-slides-timed-macro-last
+    (user-error "No timed macro has been recorded"))
+  (let ((name (string-trim name)))
+    (unless (string-match-p "\\`[[:alnum:]_-]+\\'" name)
+      (user-error "Use letters, digits, hyphens, or underscores for NAME"))
+    (let ((form (mapconcat
+                 (lambda (entry)
+                   (format "  (cons %S %S)" (car entry) (cdr entry)))
+                 org-slides-timed-macro-last
+                 "\n")))
+      (unless (bolp)
+        (insert "\n"))
+      (insert (format
+               "#+NAME: %s\n#+BEGIN_SRC emacs-lisp :exports none :results silent\n"
+               name)
+              ";; Recorded by org-slides; timestamps are seconds from start.\n"
+              "(list\n" form ")\n"
+              "#+END_SRC\n\n"))))
+
+;;;###autoload
+(defun org-slides-keyboard-macro-insert-block (name)
+  "Insert a named Org source block defining keyboard macro NAME.
+The block contains the output of `insert-kbd-macro' and is marked
+`:exports none' and `:results silent'."
+  (interactive (list (read-string "Keyboard macro name: ")))
+  (let ((name (string-trim name)))
+    (unless (string-match-p "\\`[[:alnum:]_-]+\\'" name)
+      (user-error "Use letters, digits, hyphens, or underscores for NAME"))
+    (let ((symbol (intern name)))
+      (unless (and (fboundp symbol)
+                   (kmacro-keyboard-macro-p symbol))
+        (user-error "No keyboard macro named %s" name))
+      (unless (bolp)
+        (insert "\n"))
+      (insert (format
+               "#+NAME: %s\n#+BEGIN_SRC emacs-lisp :exports none :results silent\n"
+               name))
+      (insert-kbd-macro symbol)
+      (unless (bolp)
+        (insert "\n"))
+      (insert "#+END_SRC\n\n"))))
 
 ;;;###autoload
 (defun org-slides-timed-macro-play (name &optional speed)
