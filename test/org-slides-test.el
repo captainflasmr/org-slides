@@ -607,6 +607,60 @@ Text two.
             (org-slides-quit)))
       (kill-buffer demo))))
 
+(ert-deftest org-slides-test-demo-adopt-window-and-step ()
+  "A manually split window can become the demo and drive bullet steps."
+  (let ((demo (get-buffer-create "org-slides-test-demo")))
+    (with-current-buffer demo
+      (erase-buffer)
+      (fundamental-mode)
+      (insert "demo"))
+    (unwind-protect
+        (with-temp-buffer
+          (switch-to-buffer (current-buffer))
+          (org-mode)
+          (insert "* One\n\n- A\n- B\n\n* Two\n\n- C\n")
+          (goto-char (point-min))
+          (org-slides-start)
+          (let ((presentation (current-buffer))
+                adopted-window)
+            (unwind-protect
+                (progn
+                  (select-window (split-window-right))
+                  (switch-to-buffer demo)
+                  (org-slides-demo-use-window)
+                  (setq adopted-window (selected-window))
+                  (should (eq (org-slides--demo-window) adopted-window))
+                  (should (buffer-local-value 'org-slides-demo-mode demo))
+                  (org-slides-demo-step-forward)
+                  (should (= (buffer-local-value 'org-slides--bullet-index
+                                                 presentation)
+                             1))
+                  (should (eq (selected-window) adopted-window))
+                  (org-slides-demo-step-forward)
+                  (should (= (buffer-local-value 'org-slides--bullet-index
+                                                 presentation)
+                             2))
+                  ;; Moving to a slide without a DEMO spec must keep the
+                  ;; adopted window and its demo-mode keys.
+                  (org-slides-demo-next)
+                  (should (eq (org-slides--demo-window) adopted-window))
+                  (should (buffer-local-value 'org-slides-demo-mode demo))
+                  (should (eq (selected-window) adopted-window))
+                  (org-slides-demo-step-forward)
+                  (should (= (buffer-local-value 'org-slides--bullet-index
+                                                 presentation)
+                             1))
+                  (org-slides-demo-hide)
+                  (should (window-live-p adopted-window))
+                  (should-not (window-parameter adopted-window
+                                                'org-slides-demo)))
+              (with-current-buffer presentation
+                (org-slides-quit))
+              (when (window-live-p adopted-window)
+                (delete-window adopted-window)))))
+      (kill-buffer demo)
+      (delete-other-windows))))
+
 (ert-deftest org-slides-test-demo-keybindings ()
   "The demo commands have presentation and demo-buffer bindings."
   (should (eq (lookup-key org-slides-mode-map (kbd "d"))
@@ -625,6 +679,10 @@ Text two.
               #'org-slides-demo-play-macro))
   (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-t"))
               #'org-slides-timed-macro-toggle))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-f"))
+              #'org-slides-demo-step-forward))
+  (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-b"))
+              #'org-slides-demo-step-backward))
   (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-n"))
               #'org-slides-demo-next))
   (should (eq (lookup-key org-slides-demo-mode-map (kbd "C-c C-p"))

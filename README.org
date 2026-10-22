@@ -51,7 +51,7 @@ Each top-level heading is one slide; the text before the first heading is the ti
 - Long slides are paged automatically, one screenful at a time, in the same window.  The end of the slide is never cut off; =n=/=p= move through the pages and then to the next/previous slide.
 - Org list items can be stepped through one at a time: unrevealed items use the `org-slides-bullet-shadow' face, =SPC= or =f= reveals the next item, and =S-SPC= (or =b=/=S-TAB=/=Backspace=) puts the previous item back into shadow.  Nested list items are stepped individually.
 - Experimental split-page mode (=org-slides-page-style= set to =split=) narrows to one computed page at a time, shows only that page's content, and displays =SLIDE.PAGE / TOTAL-SLIDES.TOTAL-PAGES= (for example =2.3 / 5.4=) in the mode line.  The title page is slide 0 and top-level headings are numbered 1, 2, 3, ... in document order.  The indicator is shown on every slide by default.  Page breaks fit the window, prefer to start at a nested heading, and can be recomputed after a resize or text-scale change.
-- A demonstration pane can run beside the presentation.  A slide can name a demo with a =DEMO= property or a =#+DEMO:= line; the pane shows an Emacs buffer, file, URL, video, shell command, interactive shell, keyboard macro, timed keyboard macro, or the result of an Emacs Lisp expression.  =DEMO-MACRO= and =DEMO-TIMED-MACRO= replay recorded steps after the demo buffer opens.  =d= toggles the pane and =C-c C-o= moves focus between the slide and the demo.
+- A demonstration pane can run beside the presentation.  A slide can name a demo with a =DEMO= property or a =#+DEMO:= line; the pane shows an Emacs buffer, file, URL, video, shell command, interactive shell, keyboard macro, timed keyboard macro, or the result of an Emacs Lisp expression.  =DEMO-MACRO= and =DEMO-TIMED-MACRO= replay recorded steps after the demo buffer opens.  A manually split right-hand window can be adopted as the demo with =org-slides-demo-use-window=, and =C-c C-f=/=C-c C-b= reveal bullets from the demo buffer.  =d= toggles the pane and =C-c C-o= moves focus between the slide and the demo.
 - Macro definitions can live in named Emacs Lisp source blocks in the presentation file.  A block marked =:exports none= stays out of exports and is hidden during the presentation by default.
 - The text scale in use before the presentation is restored on quit.
 - Overlay and cursor state is buffer-local, so multiple presentations do not clobber each other.
@@ -106,23 +106,23 @@ Each tall slide is then split into pages that fit the window.  Only the current 
 A slide can run a demonstration in a side window.  Put a =DEMO= property in the slide, or a =#+DEMO:= line anywhere in the slide body:
 
 #+begin_src org
-* Live demo
+,* Live demo
 #+DEMO: buffer:*Python*
 
-* Video demo
+,* Video demo
 #+DEMO: video:~/videos/demo.mp4
 
-* Shell demo
+,* Shell demo
 #+DEMO: shell:
 
-* Command demo
+,* Command demo
 #+DEMO: command:python3 demo.py
 
-* Recorded demo
+,* Recorded demo
 #+DEMO: shell:
 #+DEMO-MACRO: my-shell-demo
 
-* Self-playing macro
+,* Self-playing macro
 #+DEMO: macro:my-demo
 #+end_src
 
@@ -294,17 +294,31 @@ Only =emacs-lisp= blocks can be used as macro definitions.  Org-slides evaluates
 
 The block can be anywhere in the file, including before the first heading.  It does not need to be on the slide that uses the macro.
 
+** Using a manually split window
+
+If you prefer to set up the layout yourself, split the frame so the presentation is on the left and your demo buffer is on the right.  Put the demo buffer in the right window, select it, and run:
+
+#+begin_src org
+M-x org-slides-demo-use-window
+#+end_src
+
+That window is adopted as the demo pane for the current presentation.  An adopted window stays attached when you move to slides that have no =DEMO= spec (=org-slides-demo-keep-adopted=, default =t=), so its demo-mode keys keep working.  Pressing =C-c C-d= detaches it without deleting the window, so your manual split survives.  A later =DEMO= spec displays its buffer in the adopted window.  Set =org-slides-demo-keep-adopted= to =nil= if you want an adopted window detached on slides without a demo.
+
 The demo buffer gets its own =org-slides-demo-mode=, so you can drive the presentation without leaving it:
 
 | Key         | Command                                             |
 |-------------+-----------------------------------------------------|
 | =C-c C-o=   | Return to the presentation window                   |
-| =C-c C-d=   | Hide the demo pane                                  |
+| =C-c C-d=   | Detach / hide the demo pane                         |
 | =C-c C-m=   | Play a keyboard macro in the demo pane              |
 | =C-c C-t=   | Start/stop recording a timed macro                  |
+| =C-c C-f=   | Reveal next list item, then next page/slide         |
+| =C-c C-b=   | Shadow previous list item, then previous page/slide |
 | =C-c C-n=   | Next page or slide, keeping focus in the demo       |
 | =C-c C-p=   | Previous page or slide, keeping focus in the demo   |
 | =C-c C-q=   | Quit the presentation                               |
+
+=C-c C-f= and =C-c C-b= mirror the presentation's =SPC= and =S-SPC= step keys, so you can reveal bullets one at a time while focus stays in the demo.  =C-c C-n= and =C-c C-p= move directly by page or slide.
 
 In the presentation buffer, =d= or =C-c C-d= toggles the pane and =C-c C-o= moves focus to the demo (pressing it again returns to the slide).  When the buffer is writable, =d= inserts its character like the other navigation keys.
 
@@ -362,6 +376,7 @@ Some GUI and terminal setups deliver Shift+Space as plain Space, so =S-SPC= can 
 (setq org-slides-demo-side 'right)      ; or 'left
 (setq org-slides-demo-default nil)      ; e.g. "buffer:*scratch*"
 (setq org-slides-demo-keep nil)         ; keep demo on slides without one
+(setq org-slides-demo-keep-adopted t)   ; keep a manually adopted demo
 (setq org-slides-demo-video-backend 'auto)
 (setq org-slides-demo-video-player nil) ; e.g. "mpv --no-terminal"
 (setq org-slides-demo-macro-delay 0)    ; wait before playing DEMO-MACRO

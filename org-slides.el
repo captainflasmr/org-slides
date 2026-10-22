@@ -217,6 +217,14 @@ line, and no `org-slides-demo-default' hides the demo pane."
   :type 'boolean
   :group 'org-slides)
 
+(defcustom org-slides-demo-keep-adopted t
+  "Whether a manually adopted demo window survives slides without a demo.
+When non-nil, a window adopted with `org-slides-demo-use-window' stays
+in place when a slide has no `DEMO' spec.  Set this to nil to detach it
+like a regular demo pane."
+  :type 'boolean
+  :group 'org-slides)
+
 (defcustom org-slides-demo-video-backend 'auto
   "How `video:' demo specs are played.
 `auto' uses an xwidget web view inside Emacs when xwidgets are
@@ -409,6 +417,8 @@ demo flag, presentation buffer, and return window.")
     (define-key map (kbd "C-c C-d") #'org-slides-demo-toggle)
     (define-key map (kbd "C-c C-m") #'org-slides-demo-play-macro)
     (define-key map (kbd "C-c C-t") #'org-slides-timed-macro-toggle)
+    (define-key map (kbd "C-c C-f") #'org-slides-demo-step-forward)
+    (define-key map (kbd "C-c C-b") #'org-slides-demo-step-backward)
     (define-key map (kbd "C-c C-n") #'org-slides-demo-next)
     (define-key map (kbd "C-c C-p") #'org-slides-demo-prev)
     (define-key map (kbd "C-c C-q") #'org-slides-demo-quit)
@@ -1428,6 +1438,17 @@ a recognized prefix is a file path; a bare URL is a URL."
     (current-buffer))
    (t nil)))
 
+(defun org-slides--visible-presentation (&optional exclude-window)
+  "Return a visible buffer with `org-slides-mode' active, or nil.
+EXCLUDE-WINDOW is ignored while searching."
+  (let (found)
+    (dolist (window (window-list nil 'nomini))
+      (unless (or found (eq window exclude-window))
+        (let ((buffer (window-buffer window)))
+          (when (buffer-local-value 'org-slides-mode buffer)
+            (setq found buffer)))))
+    found))
+
 (defun org-slides--demo-window (&optional presentation)
   "Return the demo window for PRESENTATION, or nil.
 PRESENTATION defaults to the active presentation buffer."
@@ -1448,6 +1469,12 @@ PRESENTATION defaults to the active presentation buffer."
                            presentation))
               (setq found window)))
           found))))
+
+(defun org-slides--demo-adopted-window-p ()
+  "Return non-nil when the demo window was adopted manually."
+  (let ((window (org-slides--demo-window)))
+    (and window
+         (window-parameter window 'org-slides-demo-adopted))))
 
 (defun org-slides--demo-xwidget-available-p ()
   "Return non-nil when xwidget-webkit can be used in this session."
@@ -1692,6 +1719,10 @@ scratch buffer for the macro."
     (user-error "The presentation buffer cannot be its own demo"))
   (let* ((presentation (current-buffer))
          (old-window (org-slides--demo-window presentation))
+         (adopted (and old-window
+                       (or (window-parameter old-window
+                                             'org-slides-demo-adopted)
+                           (not (window-parameter old-window 'window-side)))))
          (old-buffer (and old-window (window-buffer old-window)))
          (alist `((display-buffer-in-side-window)
                   (side . ,org-slides-demo-side)
@@ -1701,7 +1732,11 @@ scratch buffer for the macro."
                   (window-parameters
                    . ((org-slides-demo . t)
                       (org-slides-demo-presentation . ,presentation)))))
-         (window (display-buffer buffer alist)))
+         (window (if adopted
+                     (progn
+                       (set-window-buffer old-window buffer)
+                       old-window)
+                   (display-buffer buffer alist))))
     (unless (window-live-p window)
       (user-error "Unable to display the demo buffer"))
     (when (and old-buffer
@@ -1713,6 +1748,7 @@ scratch buffer for the macro."
         (setq org-slides--demo-presentation-buffer nil)))
     (set-window-parameter window 'org-slides-demo t)
     (set-window-parameter window 'org-slides-demo-presentation presentation)
+    (set-window-parameter window 'org-slides-demo-adopted adopted)
     (setq org-slides--demo-window window
           org-slides--demo-buffer buffer)
     (with-current-buffer buffer
@@ -2235,18 +2271,31 @@ KIND is `timed-macro' for a timed macro, or nil for a normal one."
       (org-slides--demo-run-scheduled-macro
        (current-buffer) macro buffer kind))))
 
+(defun org-slides--demo-detach-window (window)
+  "Detach WINDOW from the presentation.
+Delete the window unless it was adopted with
+`org-slides-demo-use-window'."
+  (when (window-live-p window)
+    (let ((buffer (window-buffer window))
+          (adopted (window-parameter window 'org-slides-demo-adopted)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (when org-slides-demo-mode
+            (org-slides-demo-mode -1))
+          (setq org-slides--demo-presentation-buffer nil)))
+      (set-window-parameter window 'org-slides-demo nil)
+      (set-window-parameter window 'org-slides-demo-presentation nil)
+      (set-window-parameter window 'org-slides-demo-adopted nil)
+      (unless adopted
+        (ignore-errors (delete-window window))))))
+
 (defun org-slides--demo-hide ()
-  "Hide the demo side window, if any."
+  "Hide the demo window, if any.
+An adopted window is detached but left in place."
   (org-slides--demo-cancel-macro)
   (let ((window (org-slides--demo-window)))
     (when window
-      (let ((buffer (window-buffer window)))
-        (when (buffer-live-p buffer)
-          (with-current-buffer buffer
-            (when org-slides-demo-mode
-              (org-slides-demo-mode -1))
-            (setq org-slides--demo-presentation-buffer nil))))
-      (ignore-errors (delete-window window))
+      (org-slides--demo-detach-window window)
       (setq org-slides--demo-window nil
             org-slides--demo-buffer nil))))
 
@@ -2402,7 +2451,9 @@ demo buffer is ready."
             org-slides--demo-timed-macro timed)
       (cond
        ((null spec)
-        (if org-slides-demo-keep
+        (if (or org-slides-demo-keep
+                (and org-slides-demo-keep-adopted
+                     (org-slides--demo-adopted-window-p)))
             (org-slides--demo-schedule-macros macro timed)
           (org-slides--demo-hide)
           (setq org-slides--demo-spec nil)))
@@ -2603,6 +2654,43 @@ as the default.  If the pane is hidden, the slide's demo is shown first."
      (t
       (select-window demo)))))
 
+;;;###autoload
+(defun org-slides-demo-use-window ()
+  "Use the selected window as the demo pane for the active presentation.
+This is for a manually split layout: the presentation buffer must be
+visible in another window.  The adopted window is not deleted when the
+demo is hidden."
+  (interactive)
+  (let* ((window (selected-window))
+         (buffer (window-buffer window))
+         (known (org-slides--demo-presentation))
+         (presentation (if (and known
+                                (buffer-local-value 'org-slides-mode known))
+                           known
+                         (org-slides--visible-presentation window))))
+    (unless presentation
+      (user-error "No active org-slides presentation"))
+    (when (eq buffer presentation)
+      (user-error "Select the demo window first"))
+    (unless (get-buffer-window presentation t)
+      (user-error "The presentation buffer is not displayed"))
+    (with-current-buffer presentation
+      (let ((old (org-slides--demo-window presentation)))
+        (when (and old (not (eq old window)))
+          (org-slides--demo-detach-window old)))
+      (setq org-slides--demo-window window
+            org-slides--demo-buffer buffer
+            org-slides--demo-macro nil
+            org-slides--demo-timed-macro nil))
+    (set-window-parameter window 'org-slides-demo t)
+    (set-window-parameter window 'org-slides-demo-presentation presentation)
+    (set-window-parameter window 'org-slides-demo-adopted t)
+    (with-current-buffer buffer
+      (setq-local org-slides--demo-presentation-buffer presentation)
+      (org-slides-demo-mode 1))
+    (force-window-update buffer)
+    (message "Org Slides: using this window as the demo pane")))
+
 (defun org-slides--demo-call-in-presentation (function)
   "Call FUNCTION with the presentation window selected.
 Return to the demo window when the caller started there and it still
@@ -2638,6 +2726,18 @@ exists."
   "Go back in the presentation while keeping focus in the demo window."
   (interactive)
   (org-slides--demo-call-in-presentation #'org-slides-prev))
+
+;;;###autoload
+(defun org-slides-demo-step-forward ()
+  "Reveal the next list item or advance the slide from the demo window."
+  (interactive)
+  (org-slides--demo-call-in-presentation #'org-slides-step-forward))
+
+;;;###autoload
+(defun org-slides-demo-step-backward ()
+  "Shadow the previous list item or go back from the demo window."
+  (interactive)
+  (org-slides--demo-call-in-presentation #'org-slides-step-backward))
 
 ;;;###autoload
 (defun org-slides-demo-quit ()
